@@ -27,7 +27,7 @@ export function Header() {
   }, []);
 
   return (
-    <header className="border-b border-line bg-surface-1/80 backdrop-blur-xl transition-colors">
+    <header className="topbar transition-colors">
       <div className="mx-auto flex h-14 w-full max-w-[1480px] items-center justify-between px-6">
         <div className="min-w-0">
           <div className="text-sm font-medium text-ink">个人投研工作台</div>

@@ -366,8 +366,8 @@ body {
 .dark body,
 [data-resolved-mode="dark"] body {
   background-image:
-    radial-gradient(ellipse 120% 80% at 10% 0%, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 50%),
-    radial-gradient(ellipse 80% 100% at 90% 100%, color-mix(in srgb, var(--chart-4) 5%, transparent) 0%, transparent 50%);
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 35%, transparent) 0%, transparent 34%),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 4%, transparent) 0%, transparent 42%);
 }
 
 [data-style="research-paper"] body,
@@ -393,19 +393,58 @@ button, input, select, textarea { font: inherit; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
-/* Glass card – works for both themes */
+/* Core surfaces */
 .glass-card {
-  background: var(--bg-card);
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--bg-surface));
   backdrop-filter: var(--card-blur);
   -webkit-backdrop-filter: var(--card-blur);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-quiet);
-  transition: border-color 0.3s ease, box-shadow 0.3s ease, background-color 0.3s ease;
+  transition: border-color 0.22s ease, box-shadow 0.22s ease, background-color 0.22s ease;
 }
 .glass-card:hover {
-  border-color: var(--border-glow);
+  border-color: var(--border-strong);
   box-shadow: var(--shadow-hover);
+}
+
+.topbar {
+  background: color-mix(in srgb, var(--bg-card-solid) 88%, transparent);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.app-sidebar {
+  background: color-mix(in srgb, var(--bg-card-solid) 94%, var(--bg-base));
+  border-right: 1px solid var(--border);
+}
+
+.brand-mark {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-card-solid));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 12%, transparent);
+}
+
+.nav-link {
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+}
+.nav-link:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.nav-link-active {
+  background: color-mix(in srgb, var(--accent) 11%, var(--bg-card-solid));
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.status-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* Glow card for metric highlights */
@@ -427,7 +466,7 @@ button, input, select, textarea { font: inherit; }
 }
 
 .metric-card {
-  background: var(--bg-card);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-card-solid) 92%, white 3%), var(--bg-card));
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
@@ -441,7 +480,7 @@ button, input, select, textarea { font: inherit; }
 .metric-card[data-tone="bad"] { background: color-mix(in srgb, var(--up) 9%, var(--bg-card)); border-color: color-mix(in srgb, var(--up) 28%, var(--border)); }
 
 .fund-table {
-  background: var(--bg-card);
+  background: var(--bg-card-solid);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
@@ -461,7 +500,7 @@ button, input, select, textarea { font: inherit; }
 }
 
 .chat-shell {
-  background: var(--bg-card);
+  background: color-mix(in srgb, var(--bg-card-solid) 90%, var(--bg-base));
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
@@ -491,11 +530,23 @@ button, input, select, textarea { font: inherit; }
 }
 
 [data-style="terminal-pro"] .metric-card { border-radius: 8px; }
+[data-style="terminal-pro"] .glass-card,
+[data-style="terminal-pro"] .metric-card,
+[data-style="terminal-pro"] .fund-table,
+[data-style="terminal-pro"] .chat-shell {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 [data-style="terminal-pro"] .fund-table table { font-size: 12px; }
 [data-style="terminal-pro"] .fund-table th,
 [data-style="terminal-pro"] .fund-table td { padding-top: 9px; padding-bottom: 9px; }
 [data-style="terminal-pro"] .chat-shell { border-radius: 8px; }
 [data-style="terminal-pro"] .assistant-bubble { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+[data-style="terminal-pro"] .topbar,
+[data-style="terminal-pro"] .app-sidebar {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 
 [data-style="research-paper"] .glass-card,
 [data-style="research-paper"] .metric-card,
@@ -507,10 +558,18 @@ button, input, select, textarea { font: inherit; }
 [data-style="research-paper"] .assistant-bubble {
   border-left: 3px solid var(--accent);
 }
+[data-style="research-paper"] .glass-card,
+[data-style="research-paper"] .metric-card {
+  box-shadow: 0 1px 0 rgba(45, 36, 22, 0.08);
+}
 [data-style="research-paper"] .fund-table thead tr {
   text-transform: none;
 }
 
+[data-style="ledger-east"] .glass-card,
+[data-style="ledger-east"] .metric-card {
+  box-shadow: 0 1px 2px rgba(64, 40, 23, 0.08);
+}
 [data-style="ledger-east"] .fund-table tbody tr:nth-child(even) {
   background: color-mix(in srgb, var(--accent-soft) 25%, transparent);
 }

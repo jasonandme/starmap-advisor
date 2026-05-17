@@ -23,12 +23,12 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="sticky top-0 hidden h-screen w-60 shrink-0 border-r border-line bg-surface-1 lg:flex lg:flex-col">
+    <aside className="app-sidebar sticky top-0 hidden h-screen w-60 shrink-0 lg:flex lg:flex-col">
       {/* Logo */}
       <div className="px-5 py-5">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-jade/15 shadow-inner-glow">
-            <Sparkles size={18} className="text-jade" />
+          <div className="brand-mark flex h-9 w-9 items-center justify-center rounded-lg">
+            <Sparkles size={18} />
           </div>
           <div>
             <div className="text-base font-semibold text-ink">星图智顾</div>
@@ -46,21 +46,19 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
-              className={`focus-ring group flex h-10 items-center gap-3 rounded-lg px-3 text-sm transition-all duration-200 ${
-                active
-                  ? "bg-jade/12 text-jade shadow-inner-glow"
-                  : "text-ink-secondary hover:bg-surface-2 hover:text-ink"
+              className={`focus-ring nav-link group flex h-10 items-center gap-3 rounded-lg px-3 text-sm transition-all duration-200 ${
+                active ? "nav-link-active" : ""
               }`}
               title={item.label}
             >
               <Icon
                 size={18}
-                className={`transition-transform duration-200 group-hover:scale-110 ${active ? "text-jade" : ""}`}
+                className="transition-transform duration-200 group-hover:scale-110"
                 aria-hidden
               />
               <span>{item.label}</span>
               {active && (
-                <span className="ml-auto h-1.5 w-1.5 rounded-full bg-jade shadow-[0_0_6px_rgba(16,185,129,0.6)]" />
+                <span className="status-dot ml-auto h-1.5 w-1.5 rounded-full" />
               )}
             </Link>
           );
@@ -70,7 +68,7 @@ export function Sidebar() {
       {/* Bottom status */}
       <div className="border-t border-line px-4 py-3">
         <div className="flex items-center gap-2 text-[11px] text-ink-muted">
-          <span className="h-1.5 w-1.5 rounded-full bg-jade animate-pulse-glow" />
+          <span className="status-dot h-1.5 w-1.5 rounded-full" />
           AKShare 数据层在线
         </div>
       </div>
