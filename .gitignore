@@ -1,0 +1,22 @@
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+backend/venv/
+starmap.db
+backend/starmap.db
+backend/uploads/
+.tools/
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/.tools/
+frontend/.next-dev.*.log
+
+# OS/editor
+.DS_Store
+Thumbs.db

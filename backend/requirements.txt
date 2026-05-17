@@ -1,0 +1,32 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sse-starlette==2.2.1
+python-multipart==0.0.20
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+aiosqlite==0.20.0
+
+# Pydantic
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# LLM & Agent
+langchain==0.3.14
+langchain-core==0.3.30
+langchain-openai==0.3.0
+langgraph==0.2.60
+
+# Data
+akshare==1.18.60
+pandas==2.2.3
+pandas_ta>=0.4.71b0
+redis==5.2.1
+
+# Scheduling
+apscheduler==3.10.4
+
+# Utilities
+httpx==0.28.1
+python-dotenv==1.0.1
