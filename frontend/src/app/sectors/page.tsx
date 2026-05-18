@@ -69,9 +69,9 @@ export default function SectorsPage() {
   const [newsLoading, setNewsLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  const loadNews = useCallback((sector: SectorRecord) => {
+  const loadNews = useCallback((sector: SectorRecord, refresh = false) => {
     setNewsLoading(true);
-    api.sectorNews(sector.name, 8)
+    api.sectorNews(sector.name, 8, refresh)
       .then((result) => {
         setNews(result.news || []);
         setNewsFetchedAt(new Date().toLocaleString("zh-CN", {
@@ -89,24 +89,35 @@ export default function SectorsPage() {
       .finally(() => setNewsLoading(false));
   }, []);
 
-  useEffect(() => {
-    api.sectorOverview(100)
+  const loadOverview = useCallback((refresh = false) => {
+    api.sectorOverview(100, refresh)
       .then((result) => {
         setData(result);
-        setSelected(result.recommended[0] || result.sectors[0] || null);
+        setSelected((current) => {
+          if (!current) return result.recommended[0] || result.sectors[0] || null;
+          return result.sectors.find((item) => item.name === current.name) || result.recommended[0] || result.sectors[0] || null;
+        });
       })
       .catch((error) => setMessage(error instanceof Error ? error.message : "板块数据加载失败"));
   }, []);
 
   useEffect(() => {
+    loadOverview(true);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") loadOverview(true);
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [loadOverview]);
+
+  useEffect(() => {
     if (!selected) return;
-    loadNews(selected);
+    loadNews(selected, true);
   }, [loadNews, selected]);
 
   useEffect(() => {
     if (!selected) return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") loadNews(selected);
+      if (document.visibilityState === "visible") loadNews(selected, true);
     }, 60_000);
     return () => window.clearInterval(timer);
   }, [loadNews, selected]);
@@ -265,7 +276,7 @@ export default function SectorsPage() {
               <button
                 className="focus-ring h-8 rounded-lg border border-line bg-surface-2 px-2.5 text-xs text-ink-muted transition-colors hover:border-jade/30 hover:text-jade disabled:opacity-60"
                 disabled={!selected || newsLoading}
-                onClick={() => selected && loadNews(selected)}
+                onClick={() => selected && loadNews(selected, true)}
                 type="button"
               >
                 {newsLoading ? "刷新中" : "刷新"}

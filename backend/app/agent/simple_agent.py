@@ -297,7 +297,7 @@ def _snapshot_date_from_source(source: str | None) -> str | None:
     return None
 
 
-async def _build_portfolio_context(fetch_quotes: bool = False) -> dict[str, Any]:
+async def _build_portfolio_context(fetch_quotes: bool = True) -> dict[str, Any]:
     async with async_session() as session:
         rows = (await session.execute(select(PortfolioItem))).scalars().all()
     holdings = [item for item in rows if item.is_holding]
@@ -312,7 +312,12 @@ async def _build_portfolio_context(fetch_quotes: bool = False) -> dict[str, Any]
             try:
                 quote = await get_latest_fund_quote(item.fund_code)
             except Exception as exc:
-                quote = {"source": "error", "error": str(exc)}
+                quote = {
+                    "source": "error",
+                    "error": str(exc),
+                    "snapshot_daily_profit": item.yesterday_profit,
+                    "snapshot_date": _snapshot_date_from_source(item.source),
+                }
             quote["estimated_daily_profit"] = _estimate_daily_profit(item.amount, quote.get("daily_return"))
             return item.id, quote
 

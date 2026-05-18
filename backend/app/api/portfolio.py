@@ -5,6 +5,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 import uuid
 import asyncio
 import time
@@ -19,6 +21,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.data.akshare_fund import get_latest_fund_quote
+from app.data.cache import cache
 from app.data.portfolio_seed import SCREENSHOT_HOLDINGS, SCREENSHOT_WATCHLIST
 from app.database import get_db
 from app.models.portfolio import InvestmentPreference, PortfolioAction, PortfolioImport, PortfolioItem
@@ -301,8 +304,8 @@ def _snapshot_date_from_source(source: str | None) -> str | None:
     return None
 
 
-async def enrich_latest_quotes(items: list[PortfolioItem]) -> dict[int, dict[str, Any]]:
-    if os.getenv("STARMAP_ENABLE_PORTFOLIO_LIVE_QUOTES", "").lower() not in {"1", "true", "yes"}:
+async def enrich_latest_quotes(items: list[PortfolioItem], force_refresh: bool = False) -> dict[int, dict[str, Any]]:
+    if os.getenv("STARMAP_DISABLE_PORTFOLIO_LIVE_QUOTES", "").lower() in {"1", "true", "yes"}:
         return {
             item.id: {
                 "code": item.fund_code,
@@ -315,20 +318,108 @@ async def enrich_latest_quotes(items: list[PortfolioItem]) -> dict[int, dict[str
             if item.is_holding
         }
     holdings = [item for item in items if item.is_holding and item.fund_code]
+    if not holdings:
+        return {}
+    if os.getenv("STARMAP_PORTFOLIO_QUOTE_MODE", "isolated").lower() != "direct":
+        isolated_quotes = await _fetch_portfolio_quotes_isolated([item.fund_code for item in holdings], force_refresh=force_refresh)
+        return {
+            item.id: {
+                **isolated_quotes.get(item.fund_code, {}),
+                "estimated_daily_profit": _estimate_daily_profit(item.amount, isolated_quotes.get(item.fund_code, {}).get("daily_return")),
+                **(
+                    {}
+                    if isolated_quotes.get(item.fund_code, {}).get("daily_return") is not None
+                    else {
+                        "snapshot_daily_profit": item.yesterday_profit,
+                        "snapshot_date": _snapshot_date_from_source(item.source),
+                    }
+                ),
+            }
+            for item in holdings
+        }
     semaphore = asyncio.Semaphore(5)
 
     async def load(item: PortfolioItem) -> tuple[int, dict[str, Any]]:
         async with semaphore:
             try:
-                quote = await get_latest_fund_quote(item.fund_code)
+                quote = await get_latest_fund_quote(item.fund_code, force_refresh=force_refresh)
             except Exception as exc:
-                quote = {"code": item.fund_code, "source": "error", "error": str(exc)}
+                quote = {
+                    "code": item.fund_code,
+                    "source": "error",
+                    "error": str(exc),
+                    "snapshot_daily_profit": item.yesterday_profit,
+                    "snapshot_date": _snapshot_date_from_source(item.source),
+                }
             daily_return = quote.get("daily_return")
             quote["estimated_daily_profit"] = _estimate_daily_profit(item.amount, daily_return)
             return item.id, quote
 
     pairs = await asyncio.gather(*(load(item) for item in holdings))
     return dict(pairs)
+
+
+async def _fetch_portfolio_quotes_isolated(codes: list[str], force_refresh: bool = False) -> dict[str, dict[str, Any]]:
+    unique_codes = sorted({code for code in codes if code})
+    cache_key = "portfolio:quotes:" + ",".join(unique_codes)
+    if not force_refresh:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+    try:
+        result = await asyncio.to_thread(_fetch_portfolio_quotes_subprocess, unique_codes)
+    except Exception as exc:
+        result = {
+            code: {
+                "code": code,
+                "source": "error",
+                "warning": "实时净值子进程刷新失败，已保留导入快照作为兜底。",
+                "error": str(exc),
+            }
+            for code in unique_codes
+        }
+    cache.set(cache_key, result, 60)
+    return result
+
+
+def _fetch_portfolio_quotes_subprocess(codes: list[str]) -> dict[str, dict[str, Any]]:
+    script = r'''
+import asyncio
+import json
+import sys
+
+from app.data.akshare_fund import get_latest_fund_quote
+
+async def main():
+    codes = json.loads(sys.argv[1])
+    result = {}
+    for code in codes:
+        try:
+            result[code] = await get_latest_fund_quote(code, force_refresh=True)
+        except Exception as exc:
+            result[code] = {"code": code, "source": "error", "error": str(exc)}
+    print(json.dumps(result, ensure_ascii=False))
+
+asyncio.run(main())
+'''
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    completed = subprocess.run(
+        [sys.executable, "-c", script, json.dumps(codes, ensure_ascii=False)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=90,
+        cwd=str(Path(__file__).resolve().parents[2]),
+        env=env,
+    )
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        raise RuntimeError(stderr[-800:] or f"quote subprocess exited with {completed.returncode}")
+    stdout = (completed.stdout or "").strip()
+    if not stdout:
+        raise RuntimeError("quote subprocess returned empty output")
+    return json.loads(stdout.splitlines()[-1])
 
 
 def serialize_item(item: PortfolioItem, quote: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -967,10 +1058,10 @@ async def update_preferences(req: PreferencePatchRequest, db: AsyncSession = Dep
 
 
 @router.get("/items", summary="获取组合条目")
-async def get_portfolio_items(db: AsyncSession = Depends(get_db)):
+async def get_portfolio_items(refresh: bool = False, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(PortfolioItem).order_by(PortfolioItem.is_holding.desc(), PortfolioItem.amount.desc()))
     items = result.scalars().all()
-    quotes = await enrich_latest_quotes(items)
+    quotes = await enrich_latest_quotes(items, force_refresh=refresh)
     return {"count": len(items), "items": [serialize_item(item, quotes.get(item.id)) for item in items]}
 
 
@@ -1176,11 +1267,11 @@ async def get_item_action_suggestions(item_id: int, db: AsyncSession = Depends(g
 
 
 @router.get("/strategy", summary="生成组合策略建议")
-async def get_portfolio_strategy(db: AsyncSession = Depends(get_db)):
+async def get_portfolio_strategy(refresh: bool = False, db: AsyncSession = Depends(get_db)):
     pref = await get_or_create_preference(db)
     result = await db.execute(select(PortfolioItem))
     items = result.scalars().all()
-    quotes = await enrich_latest_quotes(items)
+    quotes = await enrich_latest_quotes(items, force_refresh=refresh)
     exposure = build_exposure(items, pref, quotes)
     alerts = build_alerts(exposure, pref)
     strategy = build_current_strategy(exposure, pref)

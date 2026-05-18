@@ -84,8 +84,8 @@ export default function PortfolioPage() {
   const pnlLabel = dailyPnl === null && snapshotPnl !== null ? "快照日盈亏" : "当日盈亏";
   const returnLabel = dailyReturnPct === null && snapshotReturnPct !== null ? "快照涨跌" : "净值涨跌";
 
-  async function load() {
-    const [prefData, itemData, strategyData] = await Promise.all([api.portfolioPreferences(), api.portfolioItems(), api.portfolioStrategy()]);
+  async function load(refresh = false) {
+    const [prefData, itemData, strategyData] = await Promise.all([api.portfolioPreferences(), api.portfolioItems(refresh), api.portfolioStrategy(refresh)]);
     setPreference(prefData.preference);
     setPresets(prefData.presets);
     setGoals(prefData.goal_options);
@@ -93,7 +93,13 @@ export default function PortfolioPage() {
     setStrategy(strategyData);
   }
 
-  useEffect(() => { load().catch((e) => setMessage(e instanceof Error ? e.message : "加载失败")).finally(() => setLoading(false)); }, []);
+  useEffect(() => {
+    load(true).catch((e) => setMessage(e instanceof Error ? e.message : "加载失败")).finally(() => setLoading(false));
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") load(true).catch(() => undefined);
+    }, 120_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   function positionPct(item: PortfolioItem) { return totalAmount > 0 ? (item.amount / totalAmount) * 100 : 0; }
 

@@ -37,7 +37,7 @@ export default function FundsPage() {
   const [viewMode, setViewMode] = useState<"return" | "nav">("return");
 
   useEffect(() => {
-    api.rank(fundType, 30)
+    api.rank(fundType, 30, true)
       .then((data) => { setFunds(data.funds || []); setMessage(data.warning || ""); })
       .catch((error) => setMessage(error instanceof Error ? error.message : "加载失败"));
   }, [fundType]);
@@ -50,14 +50,14 @@ export default function FundsPage() {
   async function search() {
     if (!query.trim()) return;
     try {
-      const data = await api.searchFunds(query.trim());
+      const data = await api.searchFunds(query.trim(), true);
       setFunds(data.funds || []);
       setMessage(data.warning || `找到 ${data.funds?.length || 0} 条结果`);
     } catch (err) { setMessage(err instanceof Error ? err.message : "搜索失败"); }
   }
 
   async function loadDetail(code: string) {
-    const detail = await api.fundDetail(code);
+    const detail = await api.fundDetail(code, true);
     setSelected(detail);
   }
 
@@ -67,7 +67,7 @@ export default function FundsPage() {
     const parsed = compareCodes.split(/[,\s，]+/).map((s) => s.trim()).filter(Boolean).slice(0, 5);
     if (parsed.length < 2) { setMessage("至少输入 2 个基金代码"); return; }
     try {
-      const data = await api.compare(parsed);
+      const data = await api.compare(parsed, true);
       setCompareFunds(data.funds || []);
     } catch (err) { setMessage(err instanceof Error ? err.message : "对比失败"); }
   }

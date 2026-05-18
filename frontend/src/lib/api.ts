@@ -125,6 +125,14 @@ export type PortfolioItem = {
   notes?: string;
 };
 
+function refreshParam(refresh?: boolean) {
+  return refresh ? "&refresh=true" : "";
+}
+
+function refreshQuery(refresh?: boolean) {
+  return refresh ? "?refresh=true" : "";
+}
+
 export type PortfolioAction = {
   id: number;
   item_id?: number | null;
@@ -235,26 +243,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ status: string; app: string; version: string }>("/api/health"),
   llmOptions: () => request<{ active: string; options: LlmOption[] }>("/api/system/llm-options"),
-  recommend: (fundType = "QDII", risk = "balanced", topN = 5) =>
+  recommend: (fundType = "QDII", risk = "balanced", topN = 5, refresh = false) =>
     request<{ funds: FundRecord[]; warning?: string; source?: string }>(
-      `/api/funds/recommend?fund_type=${encodeURIComponent(fundType)}&risk=${risk}&top_n=${topN}`
+      `/api/funds/recommend?fund_type=${encodeURIComponent(fundType)}&risk=${risk}&top_n=${topN}${refreshParam(refresh)}`
     ),
-  rank: (fundType = "全部", topN = 30) =>
+  rank: (fundType = "全部", topN = 30, refresh = false) =>
     request<{ funds: FundRecord[]; warning?: string; source?: string }>(
-      `/api/funds/rank?fund_type=${encodeURIComponent(fundType)}&top_n=${topN}`
+      `/api/funds/rank?fund_type=${encodeURIComponent(fundType)}&top_n=${topN}${refreshParam(refresh)}`
     ),
-  searchFunds: (query: string) =>
+  searchFunds: (query: string, refresh = false) =>
     request<{ funds: FundRecord[]; warning?: string }>(
-      `/api/funds/search?q=${encodeURIComponent(query)}`
+      `/api/funds/search?q=${encodeURIComponent(query)}${refreshParam(refresh)}`
     ),
-  fundDetail: (code: string) => request<FundDetail>(`/api/funds/${code}`),
-  sectorOverview: (limit = 80) => request<SectorOverview>(`/api/sectors/overview?limit=${limit}`),
-  sectorNews: (name: string, limit = 10) =>
+  fundDetail: (code: string, refresh = false) => request<FundDetail>(`/api/funds/${code}${refreshQuery(refresh)}`),
+  sectorOverview: (limit = 80, refresh = false) => request<SectorOverview>(`/api/sectors/overview?limit=${limit}${refreshParam(refresh)}`),
+  sectorNews: (name: string, limit = 10, refresh = false) =>
     request<{ name: string; news: Array<Record<string, unknown>>; matched: boolean; warning?: string | null }>(
-      `/api/sectors/${encodeURIComponent(name)}/news?limit=${limit}`
+      `/api/sectors/${encodeURIComponent(name)}/news?limit=${limit}${refreshParam(refresh)}`
     ),
-  compare: (codes: string[]) =>
-    request<{ funds: FundDetail[] }>("/api/funds/compare", {
+  compare: (codes: string[], refresh = false) =>
+    request<{ funds: FundDetail[] }>(`/api/funds/compare${refreshQuery(refresh)}`, {
       method: "POST",
       body: JSON.stringify({ codes })
     }),
@@ -287,7 +295,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(preference)
     }),
-  portfolioItems: () => request<{ count: number; items: PortfolioItem[] }>("/api/portfolio/items"),
+  portfolioItems: (refresh = false) => request<{ count: number; items: PortfolioItem[] }>(`/api/portfolio/items${refreshQuery(refresh)}`),
   resolvePortfolioCodes: () =>
     request<{
       message: string;
@@ -299,7 +307,7 @@ export const api = {
     request<{ message: string; created: number; updated: number; note: string }>("/api/portfolio/items/seed", {
       method: "POST"
     }),
-  portfolioStrategy: () => request<PortfolioStrategy>("/api/portfolio/strategy"),
+  portfolioStrategy: (refresh = false) => request<PortfolioStrategy>(`/api/portfolio/strategy${refreshQuery(refresh)}`),
   importPortfolioImage: (formData: FormData) =>
     request<{
       id: number;
@@ -344,12 +352,12 @@ export const api = {
     request<{ code: string; count: number; dividends: Array<Record<string, unknown>>; total_dividends?: number; warning?: string }>(
       `/api/funds/${code}/dividend`
     ),
-  macroIndicators: () =>
+  macroIndicators: (refresh = false) =>
     request<{
       indicators: Record<string, { name: string; value: number | null; date: string; unit: string }>;
       as_of: string;
       errors?: string[];
-    }>("/api/funds/macro/indicators")
+    }>(`/api/funds/macro/indicators${refreshQuery(refresh)}`)
 };
 
 export function formatPct(value: number | null | undefined) {

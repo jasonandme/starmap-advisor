@@ -251,9 +251,9 @@ def _fallback_search(query: str) -> dict[str, Any]:
     }
 
 
-async def search_funds(query: str, limit: int = 20) -> dict[str, Any]:
+async def search_funds(query: str, limit: int = 20, force_refresh: bool = False) -> dict[str, Any]:
     key = f"fund:search:{query}:{limit}"
-    cached = cache.get(key)
+    cached = None if force_refresh else cache.get(key)
     if cached is not None:
         return cached
 
@@ -286,10 +286,10 @@ async def search_funds(query: str, limit: int = 20) -> dict[str, Any]:
         return result
 
 
-async def get_fund_rank(fund_type: str = "全部", top_n: int = 20) -> dict[str, Any]:
+async def get_fund_rank(fund_type: str = "全部", top_n: int = 20, force_refresh: bool = False) -> dict[str, Any]:
     fund_type = normalize_fund_type(fund_type)
     key = f"fund:rank:{fund_type}:{top_n}"
-    cached = cache.get(key)
+    cached = None if force_refresh else cache.get(key)
     if cached is not None:
         return cached
 
@@ -336,9 +336,9 @@ def _build_demo_nav(code: str) -> list[dict[str, Any]]:
     return points
 
 
-async def get_fund_nav(code: str, limit: int = 180) -> dict[str, Any]:
+async def get_fund_nav(code: str, limit: int = 180, force_refresh: bool = False) -> dict[str, Any]:
     key = f"fund:nav:{code}:{limit}"
-    cached = cache.get(key)
+    cached = None if force_refresh else cache.get(key)
     if cached is not None:
         return cached
 
@@ -426,9 +426,9 @@ def calculate_nav_metrics(nav_history: list[dict[str, Any]]) -> dict[str, float 
     }
 
 
-async def get_fund_detail(code: str) -> dict[str, Any]:
-    nav = await get_fund_nav(code)
-    search = await search_funds(code, limit=5)
+async def get_fund_detail(code: str, force_refresh: bool = False) -> dict[str, Any]:
+    nav = await get_fund_nav(code, force_refresh=force_refresh)
+    search = await search_funds(code, limit=5, force_refresh=force_refresh)
     matched = next(
         (item for item in search.get("funds", []) if item.get("code") == code),
         None,
@@ -453,9 +453,9 @@ async def get_fund_detail(code: str) -> dict[str, Any]:
     return result
 
 
-async def get_latest_fund_quote(code: str) -> dict[str, Any]:
+async def get_latest_fund_quote(code: str, force_refresh: bool = False) -> dict[str, Any]:
     """获取单只基金最新净值和最近一日净值涨跌。"""
-    nav = await get_fund_nav(code, limit=8)
+    nav = await get_fund_nav(code, limit=8, force_refresh=force_refresh)
     history = [point for point in nav.get("nav_history", []) if point.get("nav") is not None]
     latest = history[-1] if history else {}
     previous = history[-2] if len(history) >= 2 else {}
@@ -518,8 +518,8 @@ async def get_fund_holdings(code: str, year: str | None = None) -> dict[str, Any
     }
 
 
-async def compare_funds(codes: list[str]) -> dict[str, Any]:
-    funds = [await get_fund_detail(code) for code in codes]
+async def compare_funds(codes: list[str], force_refresh: bool = False) -> dict[str, Any]:
+    funds = [await get_fund_detail(code, force_refresh=force_refresh) for code in codes]
     return {
         "count": len(funds),
         "funds": funds,
@@ -560,8 +560,9 @@ async def recommend_funds(
     fund_type: str = "QDII",
     risk_preference: str = "balanced",
     top_n: int = 5,
+    force_refresh: bool = False,
 ) -> dict[str, Any]:
-    rank = await get_fund_rank(fund_type=fund_type, top_n=max(top_n * 8, 30))
+    rank = await get_fund_rank(fund_type=fund_type, top_n=max(top_n * 8, 30), force_refresh=force_refresh)
     candidates: list[dict[str, Any]] = []
     for record in rank.get("funds", []):
         enriched = dict(record)

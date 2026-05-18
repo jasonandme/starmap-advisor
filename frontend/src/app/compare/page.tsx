@@ -30,7 +30,7 @@ export default function ComparePage() {
       return;
     }
     try {
-      const data = await api.compare(parsed);
+      const data = await api.compare(parsed, true);
       setFunds(data.funds || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "对比失败");

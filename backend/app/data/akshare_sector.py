@@ -242,9 +242,9 @@ def _normalize_ths_rows(ths_df: pd.DataFrame, flow_df: pd.DataFrame) -> list[dic
     return rows
 
 
-async def get_sector_overview(limit: int = 80) -> dict[str, Any]:
+async def get_sector_overview(limit: int = 80, force_refresh: bool = False) -> dict[str, Any]:
     key = f"sector:overview:{limit}"
-    cached = cache.get(key)
+    cached = None if force_refresh else cache.get(key)
     if cached is not None:
         return cached
 
@@ -322,11 +322,11 @@ async def get_sector_overview(limit: int = 80) -> dict[str, Any]:
     }
     if warnings:
         result["warnings"] = warnings
-    cache.set(key, result, settings.CACHE_QUOTE_TTL)
+    cache.set(key, result, min(settings.CACHE_QUOTE_TTL, 60))
     return result
 
 
-async def get_sector_news(name: str, limit: int = 10) -> dict[str, Any]:
+async def get_sector_news(name: str, limit: int = 10, force_refresh: bool = False) -> dict[str, Any]:
     flash = await get_market_flash(limit=80)
     news = flash.get("news", [])
     keyword = _normalize_name(name)
@@ -342,7 +342,7 @@ async def get_sector_news(name: str, limit: int = 10) -> dict[str, Any]:
     fallback_news: list[dict[str, Any]] = []
     if not matched and not clean_news:
         try:
-            overview = await get_sector_overview(limit=120)
+            overview = await get_sector_overview(limit=120, force_refresh=force_refresh)
             sectors = overview.get("sectors", [])
             sector = next((row for row in sectors if _normalize_name(row.get("name", "")) == keyword), None)
             if sector:

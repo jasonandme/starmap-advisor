@@ -36,5 +36,13 @@ class TTLCache:
             expires_at=time.time() + ttl_seconds,
         )
 
+    def delete(self, key: str) -> None:
+        self._items.pop(key, None)
+
+    def delete_prefix(self, prefix: str) -> None:
+        for key in list(self._items):
+            if key.startswith(prefix):
+                self._items.pop(key, None)
+
 
 cache = TTLCache()

@@ -19,13 +19,13 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const loadDashboard = useCallback(async () => {
+  const loadDashboard = useCallback(async (refresh = false) => {
     setLoading(true);
     await Promise.allSettled([
-      api.recommend("全部", "balanced", 6),
+      api.recommend("全部", "balanced", 6, false),
       api.watchlist(),
-      api.sectorOverview(80),
-      api.portfolioStrategy(),
+      api.sectorOverview(80, refresh),
+      api.portfolioStrategy(refresh),
       api.history()
     ]).then(([recommend, watchlist, sectorResult, strategyResult, historyResult]) => {
       if (recommend.status === "fulfilled") setFunds(recommend.value.funds || []);
@@ -43,8 +43,8 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    loadDashboard();
-    const timer = window.setInterval(loadDashboard, 60_000);
+    loadDashboard(true);
+    const timer = window.setInterval(() => loadDashboard(true), 60_000);
     return () => window.clearInterval(timer);
   }, [loadDashboard]);
 
@@ -90,7 +90,7 @@ export default function DashboardPage() {
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={loadDashboard}
+            onClick={() => loadDashboard(true)}
             disabled={loading}
             className="focus-ring inline-flex h-9 items-center rounded-lg border border-line bg-surface-2 px-3 text-sm text-ink-secondary transition-colors hover:border-jade/30 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
           >

@@ -6,6 +6,7 @@ AKShare 扩展数据接口：基金分红、基金规模、宏观指标。
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime
 from typing import Any
 
@@ -13,6 +14,23 @@ import akshare as ak
 
 from app.data.akshare_fund import clean_value, to_float, pick
 from app.data.cache import cache
+
+
+def _date_rank(value: Any) -> tuple[int, int, int]:
+    text = str(clean_value(value) or "")
+    match = re.search(r"(\d{4})[-年/](\d{1,2})(?:[-月/](\d{1,2}))?", text)
+    if not match:
+        return (0, 0, 0)
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3) or 1))
+
+
+def _latest_row(df, date_col: str, value_col: str) -> dict[str, Any] | None:
+    if df is None or df.empty or date_col not in df.columns or value_col not in df.columns:
+        return None
+    rows = [record.to_dict() for _, record in df.iterrows() if to_float(record.to_dict().get(value_col)) is not None]
+    if not rows:
+        return None
+    return max(rows, key=lambda row: _date_rank(row.get(date_col)))
 
 
 async def get_fund_dividend(code: str) -> dict[str, Any]:
@@ -56,10 +74,10 @@ async def get_fund_dividend(code: str) -> dict[str, Any]:
         }
 
 
-async def get_macro_indicators() -> dict[str, Any]:
+async def get_macro_indicators(force_refresh: bool = False) -> dict[str, Any]:
     """获取关键宏观经济指标快照：CPI, PMI。"""
     cache_key = "macro:snapshot"
-    cached = cache.get(cache_key)
+    cached = None if force_refresh else cache.get(cache_key)
     if cached is not None:
         return cached
 
@@ -69,13 +87,14 @@ async def get_macro_indicators() -> dict[str, Any]:
     try:
         df = await asyncio.to_thread(ak.macro_china_cpi_yearly)
         if df is not None and not df.empty:
-            latest = df.iloc[-1].to_dict()
-            result["indicators"]["cpi"] = {
-                "name": "CPI 同比",
-                "value": to_float(list(latest.values())[-1]),
-                "date": str(clean_value(list(latest.values())[0])),
-                "unit": "%",
-            }
+            latest = _latest_row(df, "日期", "今值")
+            if latest:
+                result["indicators"]["cpi"] = {
+                    "name": "CPI 同比",
+                    "value": to_float(latest.get("今值")),
+                    "date": str(clean_value(latest.get("日期"))),
+                    "unit": "%",
+                }
     except Exception as exc:
         result.setdefault("errors", []).append(f"CPI: {exc}")
 
@@ -83,16 +102,16 @@ async def get_macro_indicators() -> dict[str, Any]:
     try:
         df = await asyncio.to_thread(ak.macro_china_pmi)
         if df is not None and not df.empty:
-            latest = df.iloc[-1].to_dict()
-            values = list(latest.values())
-            result["indicators"]["pmi"] = {
-                "name": "制造业 PMI",
-                "value": to_float(values[1]) if len(values) > 1 else None,
-                "date": str(clean_value(values[0])),
-                "unit": "",
-                "threshold": 50,
-                "interpretation": "PMI > 50 扩张，< 50 收缩",
-            }
+            latest = _latest_row(df, "月份", "制造业-指数")
+            if latest:
+                result["indicators"]["pmi"] = {
+                    "name": "制造业 PMI",
+                    "value": to_float(latest.get("制造业-指数")),
+                    "date": str(clean_value(latest.get("月份"))),
+                    "unit": "",
+                    "threshold": 50,
+                    "interpretation": "PMI > 50 扩张，< 50 收缩",
+                }
     except Exception as exc:
         result.setdefault("errors", []).append(f"PMI: {exc}")
 
@@ -100,15 +119,14 @@ async def get_macro_indicators() -> dict[str, Any]:
     try:
         df = await asyncio.to_thread(ak.macro_china_money_supply)
         if df is not None and not df.empty:
-            latest = df.iloc[-1].to_dict()
-            values = list(latest.values())
-            m2_value = to_float(values[1]) if len(values) > 1 else None
-            result["indicators"]["m2"] = {
-                "name": "M2 同比",
-                "value": m2_value,
-                "date": str(clean_value(values[0])),
-                "unit": "%",
-            }
+            latest = _latest_row(df, "月份", "货币和准货币(M2)-同比增长")
+            if latest:
+                result["indicators"]["m2"] = {
+                    "name": "M2 同比",
+                    "value": to_float(latest.get("货币和准货币(M2)-同比增长")),
+                    "date": str(clean_value(latest.get("月份"))),
+                    "unit": "%",
+                }
     except Exception as exc:
         result.setdefault("errors", []).append(f"M2: {exc}")
 
