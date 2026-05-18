@@ -1100,6 +1100,25 @@ async def create_portfolio_item(req: PortfolioItemRequest, db: AsyncSession = De
         if match and match["score"] >= 78:
             fund_code = match["code"]
             confidence = "auto_resolved_by_name"
+    existing = None
+    if fund_code:
+        result = await db.execute(select(PortfolioItem).where(PortfolioItem.fund_code == fund_code))
+        existing = result.scalar_one_or_none()
+    if existing is None:
+        result = await db.execute(select(PortfolioItem).where(PortfolioItem.fund_name == req.fund_name.strip()))
+        existing = result.scalar_one_or_none()
+    if existing:
+        existing.fund_code = existing.fund_code or fund_code
+        existing.is_watchlist = existing.is_watchlist or req.is_watchlist
+        existing.is_holding = existing.is_holding or req.is_holding
+        existing.tags = classify_fund(req.fund_name, req.tags or existing.tags or [])
+        existing.notes = req.notes or existing.notes
+        if req.amount > 0:
+            existing.amount = req.amount
+        await db.commit()
+        await db.refresh(existing)
+        quotes = await enrich_latest_quotes([existing])
+        return {"message": "已更新观察池", "item": serialize_item(existing, quotes.get(existing.id))}
     item = PortfolioItem(
         fund_code=fund_code,
         fund_name=req.fund_name.strip(),

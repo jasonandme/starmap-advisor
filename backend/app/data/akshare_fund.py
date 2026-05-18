@@ -427,8 +427,14 @@ def calculate_nav_metrics(nav_history: list[dict[str, Any]]) -> dict[str, float 
 
 
 async def get_fund_detail(code: str, force_refresh: bool = False) -> dict[str, Any]:
-    nav = await get_fund_nav(code, force_refresh=force_refresh)
-    search = await search_funds(code, limit=5, force_refresh=force_refresh)
+    key = f"fund:detail:{code}"
+    cached = None if force_refresh else cache.get(key)
+    if cached is not None:
+        return cached
+    nav, search = await asyncio.gather(
+        get_fund_nav(code, force_refresh=force_refresh),
+        search_funds(code, limit=5, force_refresh=force_refresh),
+    )
     matched = next(
         (item for item in search.get("funds", []) if item.get("code") == code),
         None,
@@ -450,6 +456,7 @@ async def get_fund_detail(code: str, force_refresh: bool = False) -> dict[str, A
     }
     if nav.get("warning"):
         result["warning"] = nav["warning"]
+    cache.set(key, result, settings.CACHE_RANK_TTL)
     return result
 
 

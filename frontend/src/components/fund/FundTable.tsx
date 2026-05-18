@@ -7,6 +7,8 @@ import { FundRecord, formatPct } from "@/lib/api";
 type FundTableProps = {
   funds: FundRecord[];
   onAdd?: (fund: FundRecord) => void;
+  onSelect?: (fund: FundRecord) => void;
+  onPrefetch?: (fund: FundRecord) => void;
 };
 
 function priceColor(value: number | null | undefined) {
@@ -14,7 +16,7 @@ function priceColor(value: number | null | undefined) {
   return value > 0 ? "price-up" : value < 0 ? "price-down" : "price-flat";
 }
 
-export function FundTable({ funds, onAdd }: FundTableProps) {
+export function FundTable({ funds, onAdd, onSelect, onPrefetch }: FundTableProps) {
   return (
     <div className="fund-table overflow-hidden">
       <table className="w-full table-fixed border-collapse text-sm">
@@ -39,12 +41,27 @@ export function FundTable({ funds, onAdd }: FundTableProps) {
             return (
               <tr
                 key={fund.code}
-                className="transition-colors duration-150"
+                className={`transition-colors duration-150 ${onSelect ? "cursor-pointer" : ""}`}
+                onClick={onSelect ? () => onSelect(fund) : undefined}
+                onMouseEnter={onPrefetch ? () => onPrefetch(fund) : undefined}
               >
                 <td className="px-4 py-3">
-                  <Link href={`/funds?code=${fund.code}`} className="font-medium text-ink transition-colors hover:text-[var(--accent)]">
-                    {fund.name || fund.code}
-                  </Link>
+                  {onSelect ? (
+                    <button
+                      type="button"
+                      className="focus-ring text-left font-medium text-ink transition-colors hover:text-[var(--accent)] hover:underline"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSelect(fund);
+                      }}
+                    >
+                      {fund.name || fund.code}
+                    </button>
+                  ) : (
+                    <Link href={`/funds?code=${fund.code}`} className="font-medium text-ink transition-colors hover:text-[var(--accent)]">
+                      {fund.name || fund.code}
+                    </Link>
+                  )}
                   <div className="mt-0.5 font-mono text-xs text-ink-muted">{fund.code}</div>
                 </td>
                 <td className="px-4 py-3">
@@ -84,7 +101,10 @@ export function FundTable({ funds, onAdd }: FundTableProps) {
                   {onAdd ? (
                     <button
                       className="focus-ring inline-flex h-7 w-7 items-center justify-center rounded-button border border-line bg-surface-2 text-ink-muted transition-all hover:border-line-strong hover:bg-surface-3 hover:text-[var(--accent)]"
-                      onClick={() => onAdd(fund)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onAdd(fund);
+                      }}
                       title="加入自选"
                     >
                       <Plus size={15} aria-hidden />

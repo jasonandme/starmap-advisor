@@ -296,6 +296,11 @@ export const api = {
       body: JSON.stringify(preference)
     }),
   portfolioItems: (refresh = false) => request<{ count: number; items: PortfolioItem[] }>(`/api/portfolio/items${refreshQuery(refresh)}`),
+  createPortfolioItem: (payload: Partial<PortfolioItem> & { fund_code?: string; fund_name: string }) =>
+    request<{ message: string; item: PortfolioItem }>("/api/portfolio/items", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
   resolvePortfolioCodes: () =>
     request<{
       message: string;

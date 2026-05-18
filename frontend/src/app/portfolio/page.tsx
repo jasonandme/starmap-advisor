@@ -94,7 +94,12 @@ export default function PortfolioPage() {
   }
 
   useEffect(() => {
-    load(true).catch((e) => setMessage(e instanceof Error ? e.message : "加载失败")).finally(() => setLoading(false));
+    load(false)
+      .catch((e) => setMessage(e instanceof Error ? e.message : "加载失败"))
+      .finally(() => {
+        setLoading(false);
+        load(true).catch(() => undefined);
+      });
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") load(true).catch(() => undefined);
     }, 120_000);

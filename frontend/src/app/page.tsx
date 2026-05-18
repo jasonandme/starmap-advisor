@@ -23,17 +23,18 @@ export default function DashboardPage() {
     setLoading(true);
     await Promise.allSettled([
       api.recommend("全部", "balanced", 6, false),
-      api.watchlist(),
       api.sectorOverview(80, refresh),
       api.portfolioStrategy(refresh),
       api.history()
-    ]).then(([recommend, watchlist, sectorResult, strategyResult, historyResult]) => {
+    ]).then(([recommend, sectorResult, strategyResult, historyResult]) => {
       if (recommend.status === "fulfilled") setFunds(recommend.value.funds || []);
-      if (watchlist.status === "fulfilled") setWatchCount(watchlist.value.items?.length || 0);
       if (sectorResult.status === "fulfilled") setSectors(sectorResult.value);
-      if (strategyResult.status === "fulfilled") setStrategy(strategyResult.value);
+      if (strategyResult.status === "fulfilled") {
+        setStrategy(strategyResult.value);
+        setWatchCount(strategyResult.value.exposure.watchlist_count || 0);
+      }
       if (historyResult.status === "fulfilled") setHistory((historyResult.value.items || []).slice(0, 4));
-      const firstError = [recommend, watchlist, sectorResult, strategyResult, historyResult]
+      const firstError = [recommend, sectorResult, strategyResult, historyResult]
         .find((item) => item.status === "rejected") as PromiseRejectedResult | undefined;
       if (firstError) setMessage(firstError.reason instanceof Error ? firstError.reason.message : "部分数据加载失败");
       setLastUpdated(new Date());
@@ -43,17 +44,18 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    loadDashboard(true);
+    loadDashboard(false).then(() => loadDashboard(true)).catch(() => undefined);
     const timer = window.setInterval(() => loadDashboard(true), 60_000);
     return () => window.clearInterval(timer);
   }, [loadDashboard]);
 
   async function addFund(fund: FundRecord) {
     try {
-      await api.addWatch(fund.code, fund.name);
-      const watchlist = await api.watchlist();
-      setWatchCount(watchlist.items.length);
-      setMessage(`${fund.name} 已加入自选`);
+      await api.createPortfolioItem({ fund_code: fund.code, fund_name: fund.name || fund.code, is_watchlist: true, is_holding: false, source: "manual" });
+      const nextStrategy = await api.portfolioStrategy(false);
+      setStrategy(nextStrategy);
+      setWatchCount(nextStrategy.exposure.watchlist_count || 0);
+      setMessage(`${fund.name} 已加入观察池`);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "加入自选失败");
     }

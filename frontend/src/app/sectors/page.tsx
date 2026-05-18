@@ -102,7 +102,8 @@ export default function SectorsPage() {
   }, []);
 
   useEffect(() => {
-    loadOverview(true);
+    loadOverview(false);
+    window.setTimeout(() => loadOverview(true), 300);
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") loadOverview(true);
     }, 60_000);
@@ -111,7 +112,8 @@ export default function SectorsPage() {
 
   useEffect(() => {
     if (!selected) return;
-    loadNews(selected, true);
+    loadNews(selected, false);
+    window.setTimeout(() => loadNews(selected, true), 300);
   }, [loadNews, selected]);
 
   useEffect(() => {

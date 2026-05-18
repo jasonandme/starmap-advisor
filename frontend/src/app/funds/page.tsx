@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -28,8 +28,11 @@ export default function FundsPage() {
   const [fundType, setFundType] = useState("全部");
   const [funds, setFunds] = useState<FundRecord[]>([]);
   const [selected, setSelected] = useState<FundDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
+  const detailCache = useRef(new Map<string, FundDetail>());
+  const prefetching = useRef(new Set<string>());
 
   // Compare state
   const [compareCodes, setCompareCodes] = useState("040046,270042,050025");
@@ -37,13 +40,13 @@ export default function FundsPage() {
   const [viewMode, setViewMode] = useState<"return" | "nav">("return");
 
   useEffect(() => {
-    api.rank(fundType, 30, true)
+    api.rank(fundType, 30, false)
       .then((data) => { setFunds(data.funds || []); setMessage(data.warning || ""); })
       .catch((error) => setMessage(error instanceof Error ? error.message : "加载失败"));
   }, [fundType]);
 
   async function addFund(fund: FundRecord) {
-    try { await api.addWatch(fund.code, fund.name); setMessage(`${fund.name} 已加入自选`); }
+    try { await api.createPortfolioItem({ fund_code: fund.code, fund_name: fund.name || fund.code, is_watchlist: true, is_holding: false, source: "manual" }); setMessage(`${fund.name} 已加入观察池`); }
     catch (err) { setMessage(err instanceof Error ? err.message : "加入自选失败"); }
   }
 
@@ -57,8 +60,34 @@ export default function FundsPage() {
   }
 
   async function loadDetail(code: string) {
-    const detail = await api.fundDetail(code, true);
-    setSelected(detail);
+    const cached = detailCache.current.get(code);
+    if (cached) {
+      setSelected(cached);
+      setDetailLoading(false);
+      return;
+    }
+    setDetailLoading(true);
+    try {
+      const detail = await api.fundDetail(code, false);
+      detailCache.current.set(code, detail);
+      setSelected(detail);
+      setMessage("");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "详情加载失败");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function prefetchDetail(code: string) {
+    if (detailCache.current.has(code)) return;
+    if (prefetching.current.has(code)) return;
+    if (prefetching.current.size >= 2) return;
+    prefetching.current.add(code);
+    api.fundDetail(code, false)
+      .then((detail) => detailCache.current.set(code, detail))
+      .catch(() => undefined)
+      .finally(() => prefetching.current.delete(code));
   }
 
   async function runCompare(event?: FormEvent) {
@@ -109,11 +138,16 @@ export default function FundsPage() {
               </button>
             ))}
           </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_460px] gap-5">
-            <div onClick={(e) => { const row = (e.target as HTMLElement).closest("tr"); const code = row?.querySelector(".font-mono")?.textContent?.trim(); if (code && /^\d{6}$/.test(code)) loadDetail(code); }}>
-              <FundTable funds={funds} onAdd={addFund} />
+          <div className="grid grid-cols-[minmax(0,1fr)_460px] items-start gap-5">
+            <div>
+              <FundTable funds={funds} onAdd={addFund} onSelect={(fund) => loadDetail(fund.code)} onPrefetch={(fund) => prefetchDetail(fund.code)} />
             </div>
-            <div className="sticky top-[72px] self-start">
+            <div className="sticky top-[72px] max-h-[calc(100vh-88px)] self-start overflow-y-auto overscroll-contain pr-1">
+              {detailLoading && !selected ? (
+                <div className="mb-3 rounded-card border border-line bg-card px-4 py-3 text-sm text-ink-muted shadow-card">
+                  正在加载基金详情...
+                </div>
+              ) : null}
               <FundDetailPanel fund={selected} />
             </div>
           </div>
