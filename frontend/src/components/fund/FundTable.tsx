@@ -38,6 +38,8 @@ export function FundTable({ funds, onAdd, onSelect, onPrefetch }: FundTableProps
           {funds.map((fund, index) => {
             const positive = (fund.year_return || 0) >= 0;
             const TrendIcon = positive ? TrendingUp : TrendingDown;
+            const liveReturn = fund.estimated_return_pct ?? fund.daily_return;
+            const liveLabel = fund.estimated_return_pct != null ? "估算" : fund.nav_date || "";
             return (
               <tr
                 key={fund.code}
@@ -69,8 +71,10 @@ export function FundTable({ funds, onAdd, onSelect, onPrefetch }: FundTableProps
                     {fund.fund_type || "暂无"}
                   </span>
                 </td>
-                <td className={`px-4 py-3 tabular-nums font-medium ${priceColor(fund.daily_return)}`}>
-                  {formatPct(fund.daily_return)}
+                <td className={`px-4 py-3 tabular-nums font-medium ${priceColor(liveReturn)}`}>
+                  <div>{formatPct(liveReturn)}</div>
+                  {liveLabel ? <div className="mt-0.5 text-[11px] font-normal text-ink-muted">{liveLabel}</div> : null}
+                  {fund.estimate_warning ? <div className="mt-0.5 text-[11px] font-normal text-amberline">估值有限</div> : null}
                 </td>
                 <td className={`px-4 py-3 tabular-nums ${priceColor(fund.week_return)}`}>
                   {formatPct(fund.week_return)}

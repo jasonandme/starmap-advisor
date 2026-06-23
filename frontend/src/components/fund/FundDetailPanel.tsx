@@ -1,6 +1,7 @@
 ﻿"use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Activity, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -10,7 +11,7 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import { FundDetail, formatPct } from "@/lib/api";
+import { api, FundDetail, FundRealtimeContributor, FundRealtimeEstimate, formatPct, StockRealtimeQuote } from "@/lib/api";
 
 const ranges = [
   { label: "近1月", days: 30 },
@@ -22,6 +23,9 @@ const ranges = [
 
 export function FundDetailPanel({ fund }: { fund: FundDetail | null }) {
   const [range, setRange] = useState(ranges[2]);
+  const [estimate, setEstimate] = useState<FundRealtimeEstimate | null>(null);
+  const [estimateLoading, setEstimateLoading] = useState(false);
+  const [estimateError, setEstimateError] = useState("");
 
   const filteredHistory = useMemo(() => {
     const history = fund?.nav_history || [];
@@ -32,6 +36,54 @@ export function FundDetailPanel({ fund }: { fund: FundDetail | null }) {
     const filtered = history.filter((item) => new Date(item.date).getTime() >= start);
     return filtered.length ? filtered : history.slice(-Math.min(range.days, history.length));
   }, [fund, range]);
+
+  async function loadRealtimeEstimate(refresh = false) {
+    const code = fund?.code;
+    if (!code) return;
+    setEstimateLoading(true);
+    setEstimateError("");
+    try {
+      const data = await api.fundRealtimeEstimate(code, refresh);
+      setEstimate(data);
+    } catch (error) {
+      setEstimateError(error instanceof Error ? error.message : "实时估算加载失败");
+    } finally {
+      setEstimateLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!fund?.code) {
+      setEstimate(null);
+      setEstimateError("");
+      setEstimateLoading(false);
+      return;
+    }
+    const code = fund.code;
+    let active = true;
+    setEstimate(null);
+    async function load(refresh = false) {
+      setEstimateLoading(true);
+      setEstimateError("");
+      try {
+        const data = await api.fundRealtimeEstimate(code, refresh);
+        if (active) setEstimate(data);
+      } catch (error) {
+        if (active) setEstimateError(error instanceof Error ? error.message : "实时估算加载失败");
+      } finally {
+        if (active) setEstimateLoading(false);
+      }
+    }
+    const initialTimer = window.setTimeout(() => load(), 200);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") load(false);
+    }, 20_000);
+    return () => {
+      active = false;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
+  }, [fund?.code]);
 
   if (!fund) {
     return (
@@ -48,6 +100,8 @@ export function FundDetailPanel({ fund }: { fund: FundDetail | null }) {
   const technical = fund.technical || {};
   const shortLine = buildShortLine(metrics, technical);
   const longLine = buildLongLine(metrics, fund.fund_type);
+  const displayNav = estimate?.estimated_nav ?? fund.latest_nav;
+  const displayReturn = estimate?.estimated_return_pct;
 
   return (
     <section className="animate-fade-in rounded-card border border-line bg-card p-5 shadow-card">
@@ -63,8 +117,13 @@ export function FundDetailPanel({ fund }: { fund: FundDetail | null }) {
           </div>
         </div>
         <div className="text-right">
-          <div className="text-xs text-ink-muted">最新净值</div>
-          <div className="text-2xl font-semibold tabular-nums text-[var(--accent)]">{fund.latest_nav ?? "暂无"}</div>
+          <div className="text-xs text-ink-muted">{estimate?.estimated_nav != null ? "估算净值" : estimateLoading ? "估算中" : "最新净值"}</div>
+          <div className="text-2xl font-semibold tabular-nums text-[var(--accent)]">{displayNav ?? "暂无"}</div>
+          {displayReturn != null ? (
+            <div className={`mt-1 text-xs tabular-nums ${displayReturn >= 0 ? "price-up" : "price-down"}`}>
+              估算涨跌 {formatPct(displayReturn)}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -73,6 +132,13 @@ export function FundDetailPanel({ fund }: { fund: FundDetail | null }) {
           {fund.warning}
         </div>
       ) : null}
+
+      <RealtimeEstimateCard
+        estimate={estimate}
+        loading={estimateLoading}
+        error={estimateError}
+        onRefresh={() => loadRealtimeEstimate(true)}
+      />
 
       <div className="mt-5 grid grid-cols-4 gap-3">
         <Metric label="近1月" value={formatPct(metrics.month_return as number)} pct={metrics.month_return as number} />
@@ -179,6 +245,302 @@ function Metric({ label, value, pct }: { label: string; value: string; pct?: num
   );
 }
 
+function RealtimeEstimateCard({
+  estimate,
+  loading,
+  error,
+  onRefresh
+}: {
+  estimate: FundRealtimeEstimate | null;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+}) {
+  const [showAllHoldings, setShowAllHoldings] = useState(false);
+  const [selectedStockCode, setSelectedStockCode] = useState<string | null>(null);
+  const [stockQuote, setStockQuote] = useState<StockRealtimeQuote | null>(null);
+  const [stockLoading, setStockLoading] = useState(false);
+  const [stockError, setStockError] = useState("");
+  const allocation = estimate?.asset_allocation || {};
+  const coverage = estimate?.coverage || {};
+  const contribution = estimate?.contribution || {};
+  const stockContributors = estimate?.stock_contributors || [];
+  const visibleStockContributors = showAllHoldings ? stockContributors : stockContributors.slice(0, 8);
+  const estimatedReturn = numberValue(estimate?.estimated_return_pct);
+  const stockContribution = numberValue(contribution.stock_estimated_pct);
+  const bondContribution = numberValue(contribution.bond_estimated_pct);
+
+  async function toggleStockQuote(item: FundRealtimeContributor) {
+    const code = item.stock_code;
+    if (!code) return;
+    if (selectedStockCode === code) {
+      setSelectedStockCode(null);
+      setStockQuote(null);
+      setStockError("");
+      return;
+    }
+    setSelectedStockCode(code);
+    setStockQuote(null);
+    setStockError("");
+    setStockLoading(true);
+    try {
+      const data = await api.stockQuote(code);
+      setStockQuote(data);
+    } catch (error) {
+      setStockError(error instanceof Error ? error.message : "股票行情加载失败");
+    } finally {
+      setStockLoading(false);
+    }
+  }
+
+  return (
+    <div className="mt-5 rounded-lg border border-line bg-surface-2/45 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="mt-0.5 rounded-md bg-jade/12 p-1.5 text-jade">
+            <Activity size={16} aria-hidden />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-ink">实时持仓估算</h3>
+            <p className="mt-1 text-xs leading-5 text-ink-muted">
+              按最近披露持仓与实时行情估算，现金/银行存款和无行情资产按 0 贡献处理。
+            </p>
+          </div>
+        </div>
+        <button
+          className="focus-ring inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface-1 px-2.5 text-xs text-ink-secondary transition-colors hover:border-jade/30 hover:text-jade disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={loading}
+          onClick={onRefresh}
+          type="button"
+        >
+          <RefreshCw size={13} className={loading ? "animate-spin" : ""} aria-hidden />
+          刷新
+        </button>
+      </div>
+
+      {error ? (
+        <div className="mt-3 rounded-lg border border-amberline/30 bg-amberline/8 px-3 py-2 text-xs text-amberline">
+          {error}
+        </div>
+      ) : null}
+
+      {!estimate && !error ? (
+        <div className="mt-3 rounded-lg border border-dashed border-line px-3 py-5 text-center text-xs text-ink-muted">
+          {loading ? "正在读取披露持仓和实时行情..." : "暂无实时估算数据"}
+        </div>
+      ) : null}
+
+      {estimate ? (
+        <>
+          <div className="mt-4 grid grid-cols-4 gap-3">
+            <EstimateMetric label="估算涨跌" value={formatPct(estimatedReturn)} pct={estimatedReturn} />
+            <EstimateMetric label="估算净值" value={estimate.estimated_nav == null ? "暂无" : Number(estimate.estimated_nav).toFixed(4)} />
+            <EstimateMetric label="官方净值涨跌" value={formatPct(estimate.official_daily_return)} pct={estimate.official_daily_return} />
+            <EstimateMetric label="可信度" value={coverage.confidence || "暂无"} />
+          </div>
+
+          <div className="mt-4 grid grid-cols-[1fr_1fr] gap-3">
+            <div className="rounded-lg border border-line bg-surface-1/60 p-3">
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <span className="font-medium text-ink-muted">资产比例</span>
+                <span className="font-mono text-ink-muted">{formatReportDate(allocation.report_date)}</span>
+              </div>
+              <AssetShare label="股票" value={allocation.stock_pct} tone="up" />
+              <AssetShare label="债券" value={allocation.bond_pct} tone="warn" />
+              <AssetShare label="银行/现金" value={allocation.bank_cash_pct} tone="neutral" />
+              <AssetShare label="其他" value={allocation.other_pct} tone="neutral" />
+            </div>
+
+            <div className="rounded-lg border border-line bg-surface-1/60 p-3">
+              <div className="mb-2 text-xs font-medium text-ink-muted">贡献拆解</div>
+              <ContributorSummary label="股票估算贡献" value={stockContribution} />
+              <ContributorSummary label="债券估算贡献" value={bondContribution} />
+              <ContributorSummary label="银行/现金贡献" value={0} />
+              <div className="mt-2 rounded-md bg-surface-2/70 px-2 py-1.5 text-[11px] leading-5 text-ink-muted">
+                行情覆盖 {formatPct(coverage.quote_coverage_ratio)}，资产外推覆盖 {formatPct(coverage.asset_coverage_ratio)}
+              </div>
+            </div>
+          </div>
+
+          {stockContributors.length ? (
+            <div className="mt-4">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-medium text-ink-muted">持仓股票实时贡献</div>
+                  <div className="mt-0.5 text-[11px] text-ink-muted">
+                    {stockContributors.length} 只披露股票，点击股票查看实时交易快照
+                  </div>
+                </div>
+                {stockContributors.length > 8 ? (
+                  <button
+                    className="focus-ring h-7 rounded-md border border-line bg-surface-1 px-2 text-xs text-ink-secondary transition-colors hover:border-jade/30 hover:text-jade"
+                    onClick={() => setShowAllHoldings((value) => !value)}
+                    type="button"
+                  >
+                    {showAllHoldings ? "收起" : `展开全部 ${stockContributors.length}`}
+                  </button>
+                ) : null}
+              </div>
+              <div className="rounded-lg border border-line bg-surface-1/50">
+                <div className="grid grid-cols-[minmax(0,1fr)_70px_70px_78px_28px] gap-2 border-b border-line px-3 py-2 text-[11px] text-ink-muted">
+                  <div>股票</div>
+                  <div className="text-right">持仓</div>
+                  <div className="text-right">涨跌</div>
+                  <div className="text-right">贡献</div>
+                  <div />
+                </div>
+                {visibleStockContributors.map((item, index) => (
+                  <div key={`${item.stock_code || item.stock_name}-${index}`}>
+                    <RealtimeContributorLine
+                      item={item}
+                      selected={selectedStockCode === item.stock_code}
+                      onSelect={() => toggleStockQuote(item)}
+                    />
+                    {selectedStockCode === item.stock_code ? (
+                      <StockQuotePanel quote={stockQuote} loading={stockLoading} error={stockError} fallback={item} />
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {estimate.warnings?.length ? (
+            <div className="mt-3 space-y-1">
+              {estimate.warnings.slice(0, 3).map((warning) => (
+                <div key={warning} className="rounded-md bg-amberline/8 px-2.5 py-1.5 text-[11px] leading-5 text-amberline">
+                  {warning}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function EstimateMetric({ label, value, pct }: { label: string; value: string; pct?: number | null }) {
+  return (
+    <div className="rounded-lg bg-surface-1/70 px-3 py-2.5">
+      <div className="text-xs text-ink-muted">{label}</div>
+      <div className={`mt-1 text-base font-semibold tabular-nums ${
+        pct == null ? "text-ink" : pct >= 0 ? "price-up" : "price-down"
+      }`}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function AssetShare({ label, value, tone }: { label: string; value?: number | null; tone: "up" | "warn" | "neutral" }) {
+  const pct = Math.max(0, Math.min(Number(value || 0), 100));
+  const color = tone === "up" ? "bg-jade" : tone === "warn" ? "bg-amberline" : "bg-line-strong";
+  return (
+    <div className="mb-2 last:mb-0">
+      <div className="mb-1 flex items-center justify-between text-xs">
+        <span className="text-ink-secondary">{label}</span>
+        <span className="tabular-nums text-ink-muted">{formatPct(value)}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function ContributorSummary({ label, value }: { label: string; value: number | null }) {
+  return (
+    <div className="flex items-center justify-between border-b border-line/60 py-1.5 text-xs last:border-0">
+      <span className="text-ink-secondary">{label}</span>
+      <span className={`tabular-nums ${value == null ? "text-ink-muted" : value >= 0 ? "price-up" : "price-down"}`}>
+        {formatPct(value)}
+      </span>
+    </div>
+  );
+}
+
+function RealtimeContributorLine({
+  item,
+  selected,
+  onSelect
+}: {
+  item: FundRealtimeContributor;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const contribution = numberValue(item.contribution_pct);
+  return (
+    <button
+      className={`focus-ring grid w-full grid-cols-[minmax(0,1fr)_70px_70px_78px_28px] items-center gap-2 border-b border-line/50 px-3 py-2 text-left text-xs transition-colors last:border-b-0 hover:bg-surface-2/70 ${
+        selected ? "bg-jade/8" : ""
+      }`}
+      onClick={onSelect}
+      type="button"
+    >
+      <div className="min-w-0">
+        <div className="truncate font-medium text-ink">{item.stock_name || item.bond_name || "未命名持仓"}</div>
+        <div className="font-mono text-[11px] text-ink-muted">{item.stock_code || item.bond_code || "代码暂无"}</div>
+      </div>
+      <div className="text-right tabular-nums text-ink-secondary">{formatPct(item.hold_ratio)}</div>
+      <div className={`text-right tabular-nums ${item.change_pct == null ? "text-ink-muted" : item.change_pct >= 0 ? "price-up" : "price-down"}`}>
+        {formatPct(item.change_pct)}
+      </div>
+      <div className={`text-right tabular-nums font-medium ${contribution == null ? "text-ink-muted" : contribution >= 0 ? "price-up" : "price-down"}`}>
+        {formatPct(contribution)}
+      </div>
+      <div className="flex justify-end text-ink-muted">
+        {selected ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+      </div>
+    </button>
+  );
+}
+
+function StockQuotePanel({
+  quote,
+  loading,
+  error,
+  fallback
+}: {
+  quote: StockRealtimeQuote | null;
+  loading: boolean;
+  error: string;
+  fallback: FundRealtimeContributor;
+}) {
+  const changePct = quote?.change_pct ?? fallback.change_pct;
+  return (
+    <div className="border-b border-line/50 bg-surface-2/55 px-3 py-3">
+      {loading ? (
+        <div className="text-xs text-ink-muted">正在读取股票实时交易快照...</div>
+      ) : error ? (
+        <div className="rounded-md border border-amberline/30 bg-amberline/8 px-2.5 py-2 text-xs text-amberline">{error}</div>
+      ) : (
+        <div className="grid grid-cols-5 gap-2 text-xs">
+          <StockQuoteMetric label="最新价" value={quote?.latest_price ?? fallback.latest_price ?? null} />
+          <StockQuoteMetric label="涨跌幅" value={changePct} pct />
+          <StockQuoteMetric label="换手率" value={quote?.turnover_rate ?? null} pct />
+          <StockQuoteMetric label="成交额" value={formatAmount(quote?.amount)} />
+          <StockQuoteMetric label="来源" value={quote?.source || fallback.quote_source || "暂无"} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StockQuoteMetric({ label, value, pct = false }: { label: string; value: unknown; pct?: boolean }) {
+  const numeric = typeof value === "number" ? value : null;
+  return (
+    <div className="rounded-md bg-surface-1/80 px-2.5 py-2">
+      <div className="text-[11px] text-ink-muted">{label}</div>
+      <div className={`mt-1 truncate tabular-nums text-sm font-medium ${
+        pct && numeric != null ? numeric >= 0 ? "price-up" : "price-down" : "text-ink"
+      }`}>
+        {pct && numeric != null ? formatPct(numeric) : value == null || value === "" ? "暂无" : String(value)}
+      </div>
+    </div>
+  );
+}
+
 function TechIndicator({ label, value, signal, color }: { label: string; value: string; signal?: string; color: string }) {
   return (
     <div className={`rounded-lg border p-3 ${color}`}>
@@ -222,6 +584,21 @@ function AnalysisBlock({ title, text }: { title: string; text: string }) {
 function numberValue(value: unknown) {
   const next = Number(value);
   return Number.isFinite(next) ? next : null;
+}
+
+function formatReportDate(value: unknown) {
+  if (!value) return "报告期暂无";
+  const text = String(value);
+  if (/^\d{8}$/.test(text)) return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+  return text;
+}
+
+function formatAmount(value: unknown) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "暂无";
+  if (Math.abs(amount) >= 100_000_000) return `${(amount / 100_000_000).toFixed(2)}亿`;
+  if (Math.abs(amount) >= 10_000) return `${(amount / 10_000).toFixed(2)}万`;
+  return amount.toFixed(2);
 }
 
 function buildShortLine(metrics: Record<string, number | null>, technical: Record<string, any>) {

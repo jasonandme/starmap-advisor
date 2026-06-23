@@ -11,14 +11,14 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN" className="dark" data-style="terminal-pro" data-mode="dark" data-resolved-mode="dark" suppressHydrationWarning>
+    <html lang="zh-CN" className="dark" data-style="terminal-pro" data-mode="dark" data-resolved-mode="dark" data-scroll-behavior="smooth" suppressHydrationWarning>
       <body className="antialiased">
         <ThemeProvider>
           <div className="flex min-h-screen">
             <Sidebar />
             <div className="flex min-w-0 flex-1 flex-col">
               <Header />
-              <main className="mx-auto w-full max-w-[1480px] flex-1 px-6 py-5">
+              <main className="mx-auto w-full max-w-[1480px] flex-1 px-6 pb-12 pt-5">
                 {children}
               </main>
             </div>

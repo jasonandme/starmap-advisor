@@ -43,7 +43,7 @@ const modeOptions: Array<{
 ];
 
 export function AppearancePanel() {
-  const { visualStyle, mode, setVisualStyle, setMode } = useTheme();
+  const { visualStyle, mode, setVisualStyle, setMode, resetTheme } = useTheme();
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -157,6 +157,16 @@ export function AppearancePanel() {
               );
             })}
           </div>
+          <button
+            type="button"
+            className="focus-ring mt-3 h-9 w-full rounded-button border border-line bg-surface-2 text-xs text-ink-secondary transition-all hover:border-line-strong hover:text-ink"
+            onClick={() => {
+              resetTheme();
+              setOpen(false);
+            }}
+          >
+            恢复默认外观
+          </button>
         </div>,
         document.body
       ) : null}

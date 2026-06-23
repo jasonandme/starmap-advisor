@@ -33,6 +33,7 @@ export function ChatWindow() {
     { id: "kimi", name: "Kimi", model: "moonshot-v1-32k", reasoner_model: "moonshot-v1-32k", configured: false },
     { id: "qwen", name: "通义千问", model: "qwen-plus", reasoner_model: "qwen-plus", configured: false }
   ]);
+  const [modelOptionsStatus, setModelOptionsStatus] = useState<"loading" | "ready" | "error">("loading");
   const [hydrated, setHydrated] = useState(false);
   const [loading, setLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -47,10 +48,11 @@ export function ChatWindow() {
     api.llmOptions()
       .then((result) => {
         setModelOptions(result.options);
+        setModelOptionsStatus("ready");
         if (!savedModel && result.active) setModelProvider(result.active);
       })
       .catch(() => {
-        // 使用本地默认模型列表，不影响问策。
+        setModelOptionsStatus("error");
       });
     if (saved) {
       try {
@@ -137,6 +139,12 @@ export function ChatWindow() {
   }
 
   const disabled = useMemo(() => loading || input.trim().length === 0, [loading, input]);
+
+  function modelOptionLabel(option: LlmOption) {
+    if (modelOptionsStatus === "loading") return `${option.name}（检测中）`;
+    if (modelOptionsStatus === "error") return `${option.name}（待验证）`;
+    return `${option.name}${option.configured ? "" : "（未配置）"}`;
+  }
 
   function clearConversation() {
     setMessages(defaultMessages);
@@ -232,7 +240,7 @@ export function ChatWindow() {
                 >
                   {modelOptions.map((option) => (
                     <option key={option.id} value={option.id}>
-                      {option.name}{option.configured ? "" : "（未配置）"}
+                      {modelOptionLabel(option)}
                     </option>
                   ))}
                 </select>

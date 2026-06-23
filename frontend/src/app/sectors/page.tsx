@@ -103,9 +103,8 @@ export default function SectorsPage() {
 
   useEffect(() => {
     loadOverview(false);
-    window.setTimeout(() => loadOverview(true), 300);
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") loadOverview(true);
+      if (document.visibilityState === "visible") loadOverview(false);
     }, 60_000);
     return () => window.clearInterval(timer);
   }, [loadOverview]);
@@ -113,13 +112,12 @@ export default function SectorsPage() {
   useEffect(() => {
     if (!selected) return;
     loadNews(selected, false);
-    window.setTimeout(() => loadNews(selected, true), 300);
   }, [loadNews, selected]);
 
   useEffect(() => {
     if (!selected) return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") loadNews(selected, true);
+      if (document.visibilityState === "visible") loadNews(selected, false);
     }, 60_000);
     return () => window.clearInterval(timer);
   }, [loadNews, selected]);

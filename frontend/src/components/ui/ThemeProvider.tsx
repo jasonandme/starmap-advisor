@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, ReactNode, useCallback, useContext, useEffect, useState } from "react";
 
 export type VisualStyle = "terminal-pro" | "research-paper" | "ledger-east";
 export type ThemeMode = "light" | "dark" | "system";
@@ -12,9 +12,14 @@ type ThemeContextValue = {
   resolvedMode: ResolvedMode;
   setVisualStyle: (style: VisualStyle) => void;
   setMode: (mode: ThemeMode) => void;
+  resetTheme: () => void;
   toggle: () => void;
 };
 
+const DEFAULT_VISUAL_STYLE: VisualStyle = "terminal-pro";
+const DEFAULT_MODE: ThemeMode = "dark";
+const THEME_STORAGE_VERSION = "2026-06-11-theme-v2";
+const THEME_VERSION_KEY = "starmap-theme-version";
 const visualStyles: VisualStyle[] = ["terminal-pro", "research-paper", "ledger-east"];
 const modes: ThemeMode[] = ["light", "dark", "system"];
 
@@ -39,16 +44,17 @@ function writeStorage(key: string, value: string) {
   try {
     window.localStorage.setItem(key, value);
   } catch {
-    // 主题状态仍然会在当前页面生效，无法写入时只是不持久化。
+    // The theme still applies for the current page when storage is unavailable.
   }
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
-  visualStyle: "terminal-pro",
-  mode: "dark",
+  visualStyle: DEFAULT_VISUAL_STYLE,
+  mode: DEFAULT_MODE,
   resolvedMode: "dark",
   setVisualStyle: () => {},
   setMode: () => {},
+  resetTheme: () => {},
   toggle: () => {}
 });
 
@@ -57,23 +63,22 @@ export function useTheme() {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [visualStyle, setVisualStyleState] = useState<VisualStyle>("terminal-pro");
-  const [mode, setModeState] = useState<ThemeMode>("dark");
+  const [visualStyle, setVisualStyleState] = useState<VisualStyle>(DEFAULT_VISUAL_STYLE);
+  const [mode, setModeState] = useState<ThemeMode>(DEFAULT_MODE);
   const [resolvedMode, setResolvedMode] = useState<ResolvedMode>("dark");
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    const savedVersion = readStorage(THEME_VERSION_KEY);
     const savedVisualStyle = readStorage("starmap-visual-style") as VisualStyle | null;
     const savedMode = readStorage("starmap-mode") as ThemeMode | null;
-    const legacyTheme = readStorage("starmap-theme") as ThemeMode | null;
-    const nextVisualStyle = savedVisualStyle && visualStyles.includes(savedVisualStyle)
+    const canUseSavedTheme = savedVersion === THEME_STORAGE_VERSION;
+    const nextVisualStyle = canUseSavedTheme && savedVisualStyle && visualStyles.includes(savedVisualStyle)
       ? savedVisualStyle
-      : "terminal-pro";
-    const nextMode = savedMode && modes.includes(savedMode)
+      : DEFAULT_VISUAL_STYLE;
+    const nextMode = canUseSavedTheme && savedMode && modes.includes(savedMode)
       ? savedMode
-      : legacyTheme === "light" || legacyTheme === "dark"
-        ? legacyTheme
-        : "dark";
+      : DEFAULT_MODE;
     const nextResolvedMode = resolveThemeMode(nextMode);
 
     setVisualStyleState(nextVisualStyle);
@@ -107,6 +112,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     root.dataset.style = visualStyle;
     root.dataset.mode = mode;
     root.dataset.resolvedMode = resolvedMode;
+    writeStorage(THEME_VERSION_KEY, THEME_STORAGE_VERSION);
     writeStorage("starmap-visual-style", visualStyle);
     writeStorage("starmap-mode", mode);
     writeStorage("starmap-theme", resolvedMode);
@@ -120,6 +126,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setModeState(nextMode);
   }, []);
 
+  const resetTheme = useCallback(() => {
+    setVisualStyleState(DEFAULT_VISUAL_STYLE);
+    setModeState(DEFAULT_MODE);
+  }, []);
+
   const toggle = useCallback(() => {
     setModeState((current) => {
       const currentResolved = resolveThemeMode(current);
@@ -127,13 +138,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Prevent flash of wrong theme
   if (!mounted) {
     return <div style={{ visibility: "hidden" }}>{children}</div>;
   }
 
   return (
-    <ThemeContext.Provider value={{ visualStyle, mode, resolvedMode, setVisualStyle, setMode, toggle }}>
+    <ThemeContext.Provider value={{ visualStyle, mode, resolvedMode, setVisualStyle, setMode, resetTheme, toggle }}>
       {children}
     </ThemeContext.Provider>
   );

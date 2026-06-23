@@ -10,6 +10,7 @@ import {
   Wallet,
   Sparkles
 } from "lucide-react";
+import { api } from "@/lib/api";
 
 const navItems = [
   { href: "/", label: "总览", icon: LayoutDashboard },
@@ -18,6 +19,33 @@ const navItems = [
   { href: "/sectors", label: "板块风向", icon: Compass },
   { href: "/chat", label: "星图问策", icon: MessageSquareText }
 ];
+
+function prefetchRouteData(href: string) {
+  if (href === "/portfolio") {
+    void api.portfolioOverview(false, true).catch(() => undefined);
+    return;
+  }
+  if (href === "/funds") {
+    void api.recommend("全部", "balanced", 20, false).catch(() => undefined);
+    return;
+  }
+  if (href === "/sectors") {
+    void api.sectorOverview(100, false).catch(() => undefined);
+    return;
+  }
+  if (href === "/chat") {
+    void api.llmOptions().catch(() => undefined);
+    return;
+  }
+  if (href === "/") {
+    void Promise.allSettled([
+      api.recommend("全部", "balanced", 6, false),
+      api.sectorOverview(80, false),
+      api.portfolioOverview(false, true),
+      api.history()
+    ]);
+  }
+}
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -46,6 +74,9 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              prefetch
+              onMouseEnter={() => prefetchRouteData(item.href)}
+              onFocus={() => prefetchRouteData(item.href)}
               className={`focus-ring nav-link group flex h-10 items-center gap-3 rounded-lg px-3 text-sm transition-all duration-200 ${
                 active ? "nav-link-active" : ""
               }`}

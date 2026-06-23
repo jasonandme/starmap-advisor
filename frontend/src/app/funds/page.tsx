@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
@@ -33,6 +33,7 @@ export default function FundsPage() {
   const [message, setMessage] = useState("");
   const detailCache = useRef(new Map<string, FundDetail>());
   const prefetching = useRef(new Set<string>());
+  const estimateCache = useRef(new Map<string, { expiresAt: number; fund: Partial<FundRecord> }>());
 
   // Compare state
   const [compareCodes, setCompareCodes] = useState("040046,270042,050025");
@@ -40,10 +41,20 @@ export default function FundsPage() {
   const [viewMode, setViewMode] = useState<"return" | "nav">("return");
 
   useEffect(() => {
-    api.rank(fundType, 30, false)
-      .then((data) => { setFunds(data.funds || []); setMessage(data.warning || ""); })
+    setMessage("");
+    api.recommend(fundType, "balanced", 20, false)
+      .then((data) => {
+        const rows = data.funds || [];
+        setFunds(rows);
+        setMessage(toNotice(data.warning));
+        loadFundEstimates(rows).catch(() => undefined);
+      })
       .catch((error) => setMessage(error instanceof Error ? error.message : "加载失败"));
   }, [fundType]);
+
+  useEffect(() => {
+    setMessage("");
+  }, [tab]);
 
   async function addFund(fund: FundRecord) {
     try { await api.createPortfolioItem({ fund_code: fund.code, fund_name: fund.name || fund.code, is_watchlist: true, is_holding: false, source: "manual" }); setMessage(`${fund.name} 已加入观察池`); }
@@ -54,18 +65,70 @@ export default function FundsPage() {
     if (!query.trim()) return;
     try {
       const data = await api.searchFunds(query.trim(), true);
-      setFunds(data.funds || []);
-      setMessage(data.warning || `找到 ${data.funds?.length || 0} 条结果`);
+      const rows = data.funds || [];
+      setFunds(rows);
+      setMessage(toNotice(data.warning) || `找到 ${data.funds?.length || 0} 条结果`);
+      loadFundEstimates(rows).catch(() => undefined);
     } catch (err) { setMessage(err instanceof Error ? err.message : "搜索失败"); }
   }
 
-  async function loadDetail(code: string) {
+  async function loadFundEstimates(rows: FundRecord[], refresh = false) {
+    const now = Date.now();
+    const codes = Array.from(new Set(rows.map((fund) => fund.code).filter(Boolean))).slice(0, 100);
+    const cached: Record<string, Partial<FundRecord>> = {};
+    const missing: string[] = [];
+    for (const code of codes) {
+      const hit = estimateCache.current.get(code);
+      if (!refresh && hit && hit.expiresAt > now) cached[code] = hit.fund;
+      else missing.push(code);
+    }
+    if (Object.keys(cached).length) {
+      setFunds((current) => current.map((fund) => ({ ...fund, ...(cached[fund.code] || {}) })));
+    }
+    if (!missing.length) return;
+    const data = await api.fundRealtimeEstimates(missing, refresh);
+    const expiresAt = Date.now() + (data.ttl_seconds ?? 20) * 1000;
+    const patchByCode: Record<string, Partial<FundRecord>> = {};
+    for (const [code, estimate] of Object.entries(data.estimates || {})) {
+      const patch = {
+        estimated_return_pct: estimate.estimated_return_pct ?? null,
+        estimated_nav: estimate.estimated_nav ?? null,
+        estimate_as_of: estimate.as_of ?? data.as_of ?? null,
+        estimate_confidence: estimate.coverage?.confidence ?? null,
+        estimate_warning: estimate.warnings?.[0] ?? null
+      };
+      patchByCode[code] = patch;
+      estimateCache.current.set(code, { expiresAt, fund: patch });
+    }
+    setFunds((current) => current.map((fund) => ({ ...fund, ...(patchByCode[fund.code] || {}) })));
+  }
+
+  function recordToFundDetail(fund: FundRecord): FundDetail {
+    return {
+      code: fund.code,
+      name: fund.name || fund.code,
+      fund_type: fund.fund_type,
+      latest_nav: fund.unit_nav ?? undefined,
+      metrics: {
+        daily_return: fund.daily_return ?? null,
+        month_return: fund.month_return ?? null,
+        three_month_return: fund.three_month_return ?? null,
+        year_return: fund.year_return ?? null
+      },
+      nav_history: fund.unit_nav ? [{ date: fund.nav_date || "", nav: fund.unit_nav, daily_return: fund.daily_return ?? undefined }] : [],
+      source: fund.source || "fund_list_snapshot"
+    };
+  }
+
+  async function loadDetail(fund: FundRecord) {
+    const code = fund.code;
     const cached = detailCache.current.get(code);
     if (cached) {
       setSelected(cached);
       setDetailLoading(false);
       return;
     }
+    setSelected(recordToFundDetail(fund));
     setDetailLoading(true);
     try {
       const detail = await api.fundDetail(code, false);
@@ -140,9 +203,9 @@ export default function FundsPage() {
           </div>
           <div className="grid grid-cols-[minmax(0,1fr)_460px] items-start gap-5">
             <div>
-              <FundTable funds={funds} onAdd={addFund} onSelect={(fund) => loadDetail(fund.code)} onPrefetch={(fund) => prefetchDetail(fund.code)} />
+              <FundTable funds={funds} onAdd={addFund} onSelect={(fund) => loadDetail(fund)} onPrefetch={(fund) => prefetchDetail(fund.code)} />
             </div>
-            <div className="sticky top-[72px] max-h-[calc(100vh-88px)] self-start overflow-y-auto overscroll-contain pr-1">
+            <div className="sticky top-[72px] h-[calc(100dvh-96px)] min-h-0 self-start overflow-y-auto overscroll-contain pb-14 pr-1">
               {detailLoading && !selected ? (
                 <div className="mb-3 rounded-card border border-line bg-card px-4 py-3 text-sm text-ink-muted shadow-card">
                   正在加载基金详情...
@@ -246,4 +309,9 @@ function CompareMetric({ label, value, pct }: { label: string; value: string; pc
       <div className={`mt-1 font-medium tabular-nums ${pct !== undefined && pct !== null ? pct > 0 ? "price-up" : pct < 0 ? "price-down" : "text-ink" : "text-ink"}`}>{value}</div>
     </div>
   );
+}
+
+function toNotice(value: unknown) {
+  if (!value) return "";
+  return typeof value === "string" ? value : JSON.stringify(value);
 }
