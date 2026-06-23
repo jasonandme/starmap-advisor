@@ -39,7 +39,10 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # === 数据缓存时间（秒） ===
-    CACHE_QUOTE_TTL: int = 600       # 行情缓存 10 分钟
+    CACHE_QUOTE_TTL: int = 600       # 基金净值等低频行情缓存 10 分钟
+    CACHE_STOCK_QUOTE_TTL: int = 30  # A 股实时快照缓存 30 秒
+    CACHE_FUND_ESTIMATE_TTL: int = 20 # 基金持仓估算缓存 20 秒
+    CACHE_FUND_HOLDING_TTL: int = 7 * 24 * 3600 # 披露持仓/资产配置缓存 7 天
     CACHE_RANK_TTL: int = 3600       # 排名缓存 1 小时
     CACHE_FUND_LIST_TTL: int = 86400 # 基金列表缓存 1 天
 
