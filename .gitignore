@@ -1,22 +1,55 @@
+# Environment files
 .env
+.env.*
+!.env.example
 
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
+.python-version
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 .venv/
 venv/
+backend/.venv/
 backend/venv/
+
+# Runtime data
+*.db
+*.sqlite
+*.sqlite3
 starmap.db
 backend/starmap.db
 backend/uploads/
-.tools/
+
+# Logs
+*.log
+*.out
+*.err
+backend/*.log
+backend/*.out
+backend/*.err
+frontend/*.log
 
 # Frontend
 frontend/node_modules/
 frontend/.next/
+frontend/.next-*/
+frontend/out/
+frontend/dist/
+frontend/.turbo/
 frontend/.tools/
-frontend/.next-dev.*.log
+
+# Local tools and generated checks
+.tools/
+.cache/
 
 # OS/editor
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/
