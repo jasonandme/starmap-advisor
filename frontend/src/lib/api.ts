@@ -5,6 +5,7 @@ export type FundRecord = {
   name: string;
   fund_type?: string;
   unit_nav?: number;
+  nav_date?: string;
   daily_return?: number;
   week_return?: number;
   month_return?: number;
@@ -14,6 +15,12 @@ export type FundRecord = {
   this_year_return?: number;
   score?: number;
   risk_level?: string;
+  estimated_return_pct?: number | null;
+  estimated_nav?: number | null;
+  estimate_completeness?: "full" | "partial" | "unavailable" | string | null;
+  estimate_as_of?: string | null;
+  estimate_confidence?: string | null;
+  estimate_warning?: string | null;
   source?: string;
   warning?: string;
 };
@@ -28,6 +35,73 @@ export type FundDetail = {
   technical?: Record<string, any>;
   source?: string;
   warning?: string;
+};
+
+export type FundRealtimeContributor = {
+  stock_code?: string;
+  stock_name?: string;
+  bond_code?: string;
+  bond_name?: string;
+  hold_ratio?: number | null;
+  change_pct?: number | null;
+  contribution_pct?: number | null;
+  latest_price?: number | null;
+  quote_source?: string | null;
+};
+
+export type StockRealtimeQuote = {
+  code: string;
+  name?: string | null;
+  latest_price?: number | null;
+  change_pct?: number | null;
+  turnover_rate?: number | null;
+  amount?: number | null;
+  source?: string | null;
+  [key: string]: unknown;
+};
+
+export type FundRealtimeEstimate = {
+  code: string;
+  estimated_return_pct?: number | null;
+  estimated_nav?: number | null;
+  base_nav?: number | null;
+  official_daily_return?: number | null;
+  nav_date?: string | null;
+  as_of?: string;
+  source?: string;
+  method?: string;
+  estimate_completeness?: "full" | "partial" | "unavailable" | string | null;
+  asset_allocation?: {
+    stock_pct?: number | null;
+    bond_pct?: number | null;
+    bank_cash_pct?: number | null;
+    other_pct?: number | null;
+    report_date?: string | null;
+    source?: string | null;
+    items?: Array<Record<string, unknown>>;
+  };
+  coverage?: {
+    stock_disclosed_ratio?: number | null;
+    stock_quote_covered_ratio?: number | null;
+    uncovered_stock_ratio?: number | null;
+    bond_disclosed_ratio?: number | null;
+    bond_quote_covered_ratio?: number | null;
+    quote_coverage_ratio?: number | null;
+    asset_coverage_ratio?: number | null;
+    confidence?: string;
+  };
+  contribution?: {
+    stock_direct_pct?: number | null;
+    stock_estimated_pct?: number | null;
+    bond_direct_pct?: number | null;
+    bond_estimated_pct?: number | null;
+    bank_cash_pct?: number | null;
+    other_pct?: number | null;
+  };
+  stock_contributors?: FundRealtimeContributor[];
+  bond_contributors?: FundRealtimeContributor[];
+  warnings?: string[];
+  data_quality?: Record<string, unknown>;
 };
 
 export type SectorRecord = {
@@ -113,7 +187,14 @@ export type PortfolioItem = {
   previous_nav?: number | null;
   nav_date?: string | null;
   nav_daily_return?: number | null;
+  estimated_daily_return_pct?: number | null;
+  estimated_nav?: number | null;
   estimated_daily_profit?: number | null;
+  estimate_as_of?: string | null;
+  estimate_confidence?: string | null;
+  estimate_source?: string | null;
+  estimate_completeness?: "full" | "partial" | "unavailable" | string | null;
+  estimate_warning?: string | null;
   snapshot_daily_profit?: number | null;
   snapshot_date?: string | null;
   quote_source?: string | null;
@@ -216,28 +297,117 @@ export type PortfolioStrategy = {
   disclaimer: string;
 };
 
+type CacheEntry<T = unknown> = {
+  expiresAt: number;
+  data?: T;
+  promise?: Promise<T>;
+};
+
+const responseCache = new Map<string, CacheEntry>();
+
+function isLiveRefreshPath(path: string) {
+  return /[?&]refresh=true\b/.test(path);
+}
+
+function cacheKey(path: string, init?: RequestInit) {
+  const method = (init?.method || "GET").toUpperCase();
+  return `${method}:${path}`;
+}
+
+function cacheTtl(path: string, init?: RequestInit) {
+  const method = (init?.method || "GET").toUpperCase();
+  if (method !== "GET" || isLiveRefreshPath(path)) return 0;
+  if (path.startsWith("/api/portfolio/overview")) return 20_000;
+  if (path.startsWith("/api/portfolio/items")) return 20_000;
+  if (path.startsWith("/api/portfolio/strategy")) return 20_000;
+  if (path.startsWith("/api/portfolio/preferences")) return 5 * 60_000;
+  if (path.startsWith("/api/sectors/overview")) return 60_000;
+  if (path.startsWith("/api/sectors/")) return 60_000;
+  if (path.startsWith("/api/funds/realtime-estimates")) return 20_000;
+  if (path.startsWith("/api/funds/recommend")) return 5 * 60_000;
+  if (path.startsWith("/api/funds/rank")) return 5 * 60_000;
+  if (path.startsWith("/api/funds/search")) return 60_000;
+  if (/^\/api\/funds\/[^/?]+(\?.*)?$/.test(path)) return 10 * 60_000;
+  if (path.startsWith("/api/analysis/history")) return 60_000;
+  if (path.startsWith("/api/system/llm-options")) return 5 * 60_000;
+  if (path.startsWith("/api/health")) return 10_000;
+  return 0;
+}
+
+export function clearApiCache(prefix?: string) {
+  if (!prefix) {
+    responseCache.clear();
+    return;
+  }
+  for (const key of responseCache.keys()) {
+    if (key.includes(prefix)) responseCache.delete(key);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const ttl = cacheTtl(path, init);
+  const key = cacheKey(path, init);
+  const now = Date.now();
+  if (ttl > 0) {
+    const cached = responseCache.get(key) as CacheEntry<T> | undefined;
+    if (cached?.data !== undefined && cached.expiresAt > now) return cached.data;
+    if (cached?.promise) return cached.promise;
+  }
+
   const isFormData = init?.body instanceof FormData;
-  const response = await fetch(`${API_BASE}${path}`, {
+  const promise = fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(init?.headers || {})
     },
     cache: "no-store"
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    let message = text || `HTTP ${response.status}`;
-    try {
-      const data = JSON.parse(text);
-      message = data.detail || data.message || message;
-    } catch {
-      // Keep the raw response text when it is not JSON.
+  }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      let message = text || `HTTP ${response.status}`;
+      try {
+        const data = JSON.parse(text);
+        const next = data.detail || data.message || message;
+        message = formatApiError(next);
+      } catch {
+        // Keep the raw response text when it is not JSON.
+      }
+      throw new Error(message);
     }
-    throw new Error(message);
+    return response.json() as Promise<T>;
+  });
+
+  if (ttl > 0) responseCache.set(key, { expiresAt: now + ttl, promise });
+  try {
+    const data = await promise;
+    if (ttl > 0) responseCache.set(key, { expiresAt: Date.now() + ttl, data });
+    const method = (init?.method || "GET").toUpperCase();
+    if (method !== "GET" && !path.startsWith("/api/funds/compare")) clearApiCache();
+    return data;
+  } catch (error) {
+    if (ttl > 0) responseCache.delete(key);
+    throw error;
   }
-  return response.json() as Promise<T>;
+}
+
+function formatApiError(value: unknown) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (!item || typeof item !== "object") return String(item);
+        const record = item as Record<string, unknown>;
+        const field = Array.isArray(record.loc) ? record.loc.slice(1).join(".") : "参数";
+        const msg = String(record.msg || "校验失败");
+        const limit = (record.ctx as Record<string, unknown> | undefined)?.le;
+        if (record.type === "less_than_equal" && limit != null) return `${field} 不能超过 ${limit}`;
+        return `${field}：${msg}`;
+      })
+      .join("；");
+  }
+  if (value && typeof value === "object") return JSON.stringify(value);
+  return String(value || "请求失败");
 }
 
 export const api = {
@@ -256,6 +426,9 @@ export const api = {
       `/api/funds/search?q=${encodeURIComponent(query)}${refreshParam(refresh)}`
     ),
   fundDetail: (code: string, refresh = false) => request<FundDetail>(`/api/funds/${code}${refreshQuery(refresh)}`),
+  fundRealtimeEstimate: (code: string, refresh = false) =>
+    request<FundRealtimeEstimate>(`/api/funds/${code}/realtime-estimate${refreshQuery(refresh)}`),
+  stockQuote: (code: string) => request<StockRealtimeQuote>(`/api/stocks/${code}/quote`),
   sectorOverview: (limit = 80, refresh = false) => request<SectorOverview>(`/api/sectors/overview?limit=${limit}${refreshParam(refresh)}`),
   sectorNews: (name: string, limit = 10, refresh = false) =>
     request<{ name: string; news: Array<Record<string, unknown>>; matched: boolean; warning?: string | null }>(
@@ -281,6 +454,18 @@ export const api = {
     request<{ items: Array<{ id: number; title: string; query: string; response: string; created_at: string }> }>(
       "/api/analysis/history"
     ),
+  portfolioOverview: (refresh = false, quick = false) =>
+    request<{
+      preference: InvestmentPreference;
+      presets: Record<string, Record<string, string | number | boolean>>;
+      goal_options: Record<
+        string,
+        { label: string; target_allocation: Array<{ bucket: string; target_pct: string }>; rules: string[] }
+      >;
+      count: number;
+      items: PortfolioItem[];
+      strategy: PortfolioStrategy;
+    }>(`/api/portfolio/overview?quick=${quick ? "true" : "false"}${refresh ? "&refresh=true" : ""}`),
   portfolioPreferences: () =>
     request<{
       preference: InvestmentPreference;
@@ -313,6 +498,16 @@ export const api = {
       method: "POST"
     }),
   portfolioStrategy: (refresh = false) => request<PortfolioStrategy>(`/api/portfolio/strategy${refreshQuery(refresh)}`),
+  fundRealtimeEstimates: (codes: string[], refresh = false) =>
+    request<{
+      count: number;
+      estimates: Record<string, FundRealtimeEstimate>;
+      as_of?: string;
+      ttl_seconds?: number;
+      stock_quote_ttl_seconds?: number;
+      holding_ttl_seconds?: number;
+      method?: string;
+    }>(`/api/funds/realtime-estimates?codes=${encodeURIComponent(codes.join(","))}${refreshParam(refresh)}`),
   importPortfolioImage: (formData: FormData) =>
     request<{
       id: number;

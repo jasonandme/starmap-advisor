@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.data.akshare_fund import get_latest_fund_quote
+from app.data.akshare_fund import get_fund_realtime_estimates_isolated, get_latest_fund_quote
 from app.data.cache import cache
 from app.data.portfolio_seed import SCREENSHOT_HOLDINGS, SCREENSHOT_WATCHLIST
 from app.database import get_db
@@ -315,28 +315,31 @@ async def enrich_latest_quotes(items: list[PortfolioItem], force_refresh: bool =
                 "snapshot_date": _snapshot_date_from_source(item.source),
             }
             for item in items
-            if item.is_holding
+            if (item.is_holding or item.is_watchlist) and item.fund_code
         }
-    holdings = [item for item in items if item.is_holding and item.fund_code]
-    if not holdings:
+    quoted_items = [item for item in items if (item.is_holding or item.is_watchlist) and item.fund_code]
+    if not quoted_items:
         return {}
     if os.getenv("STARMAP_PORTFOLIO_QUOTE_MODE", "isolated").lower() != "direct":
-        isolated_quotes = await _fetch_portfolio_quotes_isolated([item.fund_code for item in holdings], force_refresh=force_refresh)
-        return {
+        isolated_quotes = await _fetch_portfolio_quotes_isolated([item.fund_code for item in quoted_items], force_refresh=force_refresh)
+        quotes = {
             item.id: {
                 **isolated_quotes.get(item.fund_code, {}),
-                "estimated_daily_profit": _estimate_daily_profit(item.amount, isolated_quotes.get(item.fund_code, {}).get("daily_return")),
+                "estimated_daily_profit": _estimate_daily_profit(item.amount, isolated_quotes.get(item.fund_code, {}).get("daily_return"))
+                if item.is_holding
+                else None,
                 **(
                     {}
-                    if isolated_quotes.get(item.fund_code, {}).get("daily_return") is not None
+                    if isolated_quotes.get(item.fund_code, {}).get("daily_return") is not None or not item.is_holding
                     else {
                         "snapshot_daily_profit": item.yesterday_profit,
                         "snapshot_date": _snapshot_date_from_source(item.source),
                     }
                 ),
             }
-            for item in holdings
+            for item in quoted_items
         }
+        return await _merge_realtime_estimates(quoted_items, quotes, force_refresh=force_refresh)
     semaphore = asyncio.Semaphore(5)
 
     async def load(item: PortfolioItem) -> tuple[int, dict[str, Any]]:
@@ -352,16 +355,64 @@ async def enrich_latest_quotes(items: list[PortfolioItem], force_refresh: bool =
                     "snapshot_date": _snapshot_date_from_source(item.source),
                 }
             daily_return = quote.get("daily_return")
-            quote["estimated_daily_profit"] = _estimate_daily_profit(item.amount, daily_return)
+            quote["estimated_daily_profit"] = _estimate_daily_profit(item.amount, daily_return) if item.is_holding else None
             return item.id, quote
 
-    pairs = await asyncio.gather(*(load(item) for item in holdings))
-    return dict(pairs)
+    pairs = await asyncio.gather(*(load(item) for item in quoted_items))
+    return await _merge_realtime_estimates(quoted_items, dict(pairs), force_refresh=force_refresh)
+
+
+async def _merge_realtime_estimates(
+    items: list[PortfolioItem],
+    quotes: dict[int, dict[str, Any]],
+    force_refresh: bool = False,
+) -> dict[int, dict[str, Any]]:
+    codes = [item.fund_code for item in items if item.fund_code]
+    try:
+        estimate_payload = await get_fund_realtime_estimates_isolated(codes, force_refresh=force_refresh)
+        estimates = estimate_payload.get("estimates", {})
+    except Exception as exc:
+        estimates = {}
+        estimate_error = str(exc)
+    else:
+        estimate_error = ""
+
+    def estimate_warning_summary(warnings: list[Any], estimate_return: Any) -> str | None:
+        clean_warnings = [str(warning) for warning in warnings if warning]
+        if not clean_warnings:
+            return estimate_error or None
+        if estimate_return is None:
+            return next((warning for warning in clean_warnings[2:] if warning), clean_warnings[0])
+        return clean_warnings[0]
+
+    merged: dict[int, dict[str, Any]] = {}
+    for item in items:
+        quote = dict(quotes.get(item.id, {}))
+        estimate = estimates.get(item.fund_code, {}) if item.fund_code else {}
+        estimate_return = estimate.get("estimated_return_pct")
+        warnings = estimate.get("warnings") or []
+        coverage = estimate.get("coverage") or {}
+        quote.update(
+            {
+                "estimated_daily_return_pct": estimate_return,
+                "estimated_nav": estimate.get("estimated_nav"),
+                "estimate_as_of": estimate.get("as_of"),
+                "estimate_confidence": coverage.get("confidence"),
+                "estimate_source": estimate.get("source"),
+                "estimate_completeness": estimate.get("estimate_completeness"),
+                "estimate_warning": estimate_warning_summary(warnings, estimate_return),
+            }
+        )
+        if estimate_return is not None and item.is_holding:
+            quote["estimated_daily_profit"] = _estimate_daily_profit(item.amount, estimate_return)
+        merged[item.id] = quote
+    return merged
 
 
 async def _fetch_portfolio_quotes_isolated(codes: list[str], force_refresh: bool = False) -> dict[str, dict[str, Any]]:
     unique_codes = sorted({code for code in codes if code})
     cache_key = "portfolio:quotes:" + ",".join(unique_codes)
+    stale_key = cache_key + ":last_success"
     if not force_refresh:
         cached = cache.get(cache_key)
         if cached is not None:
@@ -378,7 +429,20 @@ async def _fetch_portfolio_quotes_isolated(codes: list[str], force_refresh: bool
             }
             for code in unique_codes
         }
-    cache.set(cache_key, result, 60)
+    stale = cache.get(stale_key)
+    if stale:
+        for code in unique_codes:
+            quote = result.get(code) or {}
+            stale_quote = stale.get(code) or {}
+            if quote.get("source") == "error" and stale_quote.get("source") != "error":
+                result[code] = {
+                    **stale_quote,
+                    "warning": "本次实时刷新失败，暂用最近一次成功行情快照。",
+                }
+    all_failed = bool(result) and all((quote or {}).get("source") == "error" for quote in result.values())
+    cache.set(cache_key, result, 5 if all_failed else 60)
+    if not all_failed:
+        cache.set(stale_key, result, 10 * 60)
     return result
 
 
@@ -388,12 +452,16 @@ import asyncio
 import json
 import sys
 
-from app.data.akshare_fund import get_latest_fund_quote
+from app.data.akshare_fund import get_fund_quotes_map, get_latest_fund_quote
 
 async def main():
     codes = json.loads(sys.argv[1])
-    result = {}
-    for code in codes:
+    try:
+        result = await get_fund_quotes_map(codes, force_refresh=True)
+    except Exception:
+        result = {}
+    missing = [code for code in codes if code not in result]
+    for code in missing:
         try:
             result[code] = await get_latest_fund_quote(code, force_refresh=True)
         except Exception as exc:
@@ -437,7 +505,14 @@ def serialize_item(item: PortfolioItem, quote: dict[str, Any] | None = None) -> 
         "previous_nav": quote.get("previous_nav"),
         "nav_date": quote.get("nav_date"),
         "nav_daily_return": quote.get("daily_return"),
+        "estimated_daily_return_pct": quote.get("estimated_daily_return_pct"),
+        "estimated_nav": quote.get("estimated_nav"),
         "estimated_daily_profit": quote.get("estimated_daily_profit"),
+        "estimate_as_of": quote.get("estimate_as_of"),
+        "estimate_confidence": quote.get("estimate_confidence"),
+        "estimate_source": quote.get("estimate_source"),
+        "estimate_completeness": quote.get("estimate_completeness"),
+        "estimate_warning": quote.get("estimate_warning"),
         "snapshot_daily_profit": quote.get("snapshot_daily_profit"),
         "snapshot_date": quote.get("snapshot_date") or _snapshot_date_from_source(item.source),
         "quote_source": quote.get("source"),
@@ -781,7 +856,10 @@ def build_exposure(items: list[PortfolioItem], pref: InvestmentPreference, quote
                 "position_pct": round(pct, 2),
                 "holding_return_pct": item.holding_return_pct,
                 "nav_daily_return": quotes.get(item.id, {}).get("daily_return"),
+                "estimated_daily_return_pct": quotes.get(item.id, {}).get("estimated_daily_return_pct"),
                 "estimated_daily_profit": quotes.get(item.id, {}).get("estimated_daily_profit"),
+                "estimate_as_of": quotes.get(item.id, {}).get("estimate_as_of"),
+                "estimate_confidence": quotes.get(item.id, {}).get("estimate_confidence"),
                 "snapshot_daily_profit": quotes.get(item.id, {}).get("snapshot_daily_profit"),
                 "snapshot_date": quotes.get(item.id, {}).get("snapshot_date") or _snapshot_date_from_source(item.source),
                 "tags": tags,
@@ -1063,6 +1141,49 @@ async def get_portfolio_items(refresh: bool = False, db: AsyncSession = Depends(
     items = result.scalars().all()
     quotes = await enrich_latest_quotes(items, force_refresh=refresh)
     return {"count": len(items), "items": [serialize_item(item, quotes.get(item.id)) for item in items]}
+
+
+@router.get("/overview", summary="获取组合页面概览")
+async def get_portfolio_overview(
+    refresh: bool = False,
+    quick: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    pref = await get_or_create_preference(db)
+    result = await db.execute(select(PortfolioItem).order_by(PortfolioItem.is_holding.desc(), PortfolioItem.amount.desc()))
+    items = result.scalars().all()
+    if quick and not refresh:
+        quotes = {
+            item.id: {
+                "code": item.fund_code,
+                "source": "snapshot",
+                "snapshot_daily_profit": item.yesterday_profit,
+                "snapshot_date": _snapshot_date_from_source(item.source),
+            }
+            for item in items
+            if (item.is_holding or item.is_watchlist) and item.fund_code
+        }
+    else:
+        live_items = [item for item in items if item.is_holding] or items[:12]
+        quotes = await enrich_latest_quotes(live_items, force_refresh=refresh)
+    exposure = build_exposure(items, pref, quotes)
+    alerts = build_alerts(exposure, pref)
+    strategy = build_current_strategy(exposure, pref)
+    return {
+        "preference": serialize_preference(pref),
+        "presets": RISK_PROFILE_PRESETS,
+        "goal_options": GOAL_OPTIONS,
+        "count": len(items),
+        "items": [serialize_item(item, quotes.get(item.id)) for item in items],
+        "strategy": {
+            "preference": serialize_preference(pref),
+            "exposure": exposure,
+            "alerts": alerts,
+            "current_strategy": strategy,
+            "strategy_options": GOAL_OPTIONS,
+            "disclaimer": "仅用于个人投研辅助，最终交易仍需人工确认。",
+        },
+    }
 
 
 @router.post("/items/resolve-codes", summary="按基金名称自动补齐代码")

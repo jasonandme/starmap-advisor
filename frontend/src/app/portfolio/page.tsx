@@ -11,6 +11,7 @@ import {
   PortfolioStrategy
 } from "@/lib/api";
 import { FundDetailPanel } from "@/components/fund/FundDetailPanel";
+import { createPortal } from "react-dom";
 
 type PresetMap = Record<string, Record<string, string | number | boolean>>;
 type GoalMap = Record<string, { label: string; target_allocation: Array<{ bucket: string; target_pct: string }>; rules: string[] }>;
@@ -39,10 +40,25 @@ function formatMoney(value: number | null | undefined) {
 }
 
 function quoteStatusText(item: PortfolioItem) {
-  if (item.nav_date) return item.nav_date;
+  if (item.estimated_daily_return_pct != null) {
+    const prefix = item.estimate_completeness === "partial" ? "部分估算" : "估算";
+    return item.estimate_as_of ? `${prefix} ${item.estimate_as_of.slice(11, 19) || item.estimate_as_of}` : prefix;
+  }
+  if (item.nav_date) return `官方 ${item.nav_date}`;
   if (item.quote_source === "snapshot" || item.quote_source === "imported_snapshot") return item.snapshot_date ? `快照 ${item.snapshot_date}` : "快照数据";
   if (item.quote_source === "error") return "净值未刷新";
   return "";
+}
+
+function estimateStatusText(item: PortfolioItem) {
+  if (item.estimated_daily_return_pct != null) return item.estimate_completeness === "partial" ? "覆盖有限" : "";
+  if (!item.estimate_warning && !item.quote_warning) return "";
+  if (item.estimate_confidence === "不可估") return "不可估";
+  return "估值有限";
+}
+
+function realtimeReturn(item: PortfolioItem) {
+  return item.estimated_daily_return_pct ?? item.nav_daily_return;
 }
 
 function metricTone(value: number | null | undefined): "up" | "down" | undefined {
@@ -67,6 +83,7 @@ export default function PortfolioPage() {
   const [actionDraft, setActionDraft] = useState({ action_type: "analyze", amount: "", schedule: "", target_fund_code: "", target_fund_name: "", reason: "" });
   const [showImport, setShowImport] = useState(false);
   const [selectedFund, setSelectedFund] = useState<FundDetail | null>(null);
+  const [detailCache, setDetailCache] = useState<Record<string, FundDetail>>({});
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const actionRef = useRef<HTMLDivElement>(null);
@@ -84,27 +101,39 @@ export default function PortfolioPage() {
   const pnlLabel = dailyPnl === null && snapshotPnl !== null ? "快照日盈亏" : "当日盈亏";
   const returnLabel = dailyReturnPct === null && snapshotReturnPct !== null ? "快照涨跌" : "净值涨跌";
 
-  async function load(refresh = false) {
-    const [prefData, itemData, strategyData] = await Promise.all([api.portfolioPreferences(), api.portfolioItems(refresh), api.portfolioStrategy(refresh)]);
-    setPreference(prefData.preference);
-    setPresets(prefData.presets);
-    setGoals(prefData.goal_options);
-    setItems(itemData.items || []);
-    setStrategy(strategyData);
+  async function load(refresh = false, quick = false) {
+    const data = await api.portfolioOverview(refresh, quick);
+    setPreference(data.preference);
+    setPresets(data.presets);
+    setGoals(data.goal_options);
+    setItems(data.items || []);
+    setStrategy(data.strategy);
   }
 
   useEffect(() => {
-    load(false)
-      .catch((e) => setMessage(e instanceof Error ? e.message : "加载失败"))
-      .finally(() => {
+    load(false, true)
+      .then(() => {
         setLoading(false);
-        load(true).catch(() => undefined);
+        window.setTimeout(() => load(false, false).catch(() => undefined), 400);
+      })
+      .catch((e) => {
+        setMessage(e instanceof Error ? e.message : "加载失败");
+        setLoading(false);
       });
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") load(true).catch(() => undefined);
-    }, 120_000);
+      if (document.visibilityState === "visible") load(false, false).catch(() => undefined);
+    }, 20_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!detailOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [detailOpen]);
 
   function positionPct(item: PortfolioItem) { return totalAmount > 0 ? (item.amount / totalAmount) * 100 : 0; }
 
@@ -139,17 +168,38 @@ export default function PortfolioPage() {
     setTimeout(() => actionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 100);
   }
 
+  function itemToFundDetail(item: PortfolioItem): FundDetail {
+    return {
+      code: item.fund_code,
+      name: item.fund_name,
+      fund_type: item.tags?.[0],
+      latest_nav: item.estimated_nav ?? item.latest_nav ?? undefined,
+      metrics: { daily_return: realtimeReturn(item) ?? null },
+      nav_history: (item.estimated_nav ?? item.latest_nav) && (item.estimate_as_of || item.nav_date) ? [{ date: item.estimate_as_of || item.nav_date || "", nav: item.estimated_nav ?? item.latest_nav ?? 0, daily_return: realtimeReturn(item) ?? undefined }] : [],
+      source: item.quote_source || "portfolio_snapshot",
+      warning: item.quote_warning || undefined
+    };
+  }
+
+  function closeFundDetail() {
+    setDetailOpen(false);
+    setSelectedFund(null);
+    setDetailLoading(false);
+  }
+
   async function openFundDetail(item: PortfolioItem) {
     if (!item.fund_code) {
       setMessage("这只基金还没有匹配到代码，先补齐代码后才能查看详情。");
       return;
     }
     setDetailOpen(true);
-    setDetailLoading(true);
-    setSelectedFund(null);
+    const cached = detailCache[item.fund_code];
+    setSelectedFund(cached || itemToFundDetail(item));
+    setDetailLoading(!cached);
     try {
       const detail = await api.fundDetail(item.fund_code);
       setSelectedFund(detail);
+      setDetailCache((cache) => ({ ...cache, [item.fund_code]: detail }));
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "基金详情加载失败");
     } finally {
@@ -351,10 +401,13 @@ export default function PortfolioPage() {
             <div className="text-xs text-ink-muted">{watchlistOnly.length} 只未持有候选</div>
           </div>
           <div className="overflow-x-auto">
-          <table className="min-w-[760px] w-full table-fixed text-sm">
+          <table className="min-w-[980px] w-full table-fixed text-sm">
             <thead className="bg-surface-2/50 text-left text-xs text-ink-muted">
               <tr>
-                <th className="w-[40%] px-4 py-3 font-medium">基金</th>
+                <th className="w-[32%] px-4 py-3 font-medium">基金</th>
+                <th className="w-[11%] px-4 py-3 text-right font-medium">当日涨跌</th>
+                <th className="w-[11%] px-4 py-3 text-right font-medium">最新净值</th>
+                <th className="w-[12%] px-4 py-3 font-medium">净值日期</th>
                 <th className="px-4 py-3 font-medium">标签</th>
                 <th className="sticky right-0 z-20 w-64 bg-surface-2 px-4 py-3 text-right font-medium shadow-[-8px_0_14px_rgba(15,23,42,0.04)]">操作</th>
               </tr>
@@ -372,6 +425,17 @@ export default function PortfolioPage() {
                       {item.fund_name}
                     </button>
                     <div className="mt-0.5 font-mono text-xs text-ink-muted">{item.fund_code || "代码待确认"}</div>
+                  </td>
+                  <td className={`px-4 py-3 text-right tabular-nums font-medium ${realtimeReturn(item) == null ? "text-ink-muted" : Number(realtimeReturn(item)) >= 0 ? "price-up" : "price-down"}`}>
+                    {formatPct(realtimeReturn(item))}
+                    <div className="mt-0.5 text-[11px] font-normal text-ink-muted">{quoteStatusText(item)}</div>
+                    {estimateStatusText(item) ? <div className="mt-0.5 text-[11px] font-normal text-amberline" title={item.estimate_warning || item.quote_warning || ""}>{estimateStatusText(item)}</div> : null}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-ink-secondary">
+                    {(item.estimated_nav ?? item.latest_nav) == null ? "暂无" : Number(item.estimated_nav ?? item.latest_nav).toFixed(4)}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-ink-muted">
+                    {item.nav_date || item.snapshot_date || "暂无"}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1">
@@ -395,32 +459,48 @@ export default function PortfolioPage() {
         </section>
       )}
 
-      {detailOpen && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/35 px-6 py-8 backdrop-blur-sm">
-          <div className="w-full max-w-5xl">
-            <div className="mb-3 flex justify-end">
+      {detailOpen && createPortal((
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-transparent px-4 py-8"
+          onClick={closeFundDetail}
+          role="presentation"
+        >
+          <section
+            className="flex h-[min(860px,calc(100dvh-64px))] w-[min(1120px,calc(100vw-32px))] flex-col overflow-hidden rounded-card border border-line bg-surface-1 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+            aria-modal="true"
+            role="dialog"
+          >
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-surface-1/95 px-5 py-3">
+              <div>
+                <div className="text-sm font-semibold text-ink">基金详情</div>
+                <div className="text-xs text-ink-muted">独立窗口滚动，不影响持仓总览。</div>
+              </div>
               <button
                 className="focus-ring rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm text-ink-secondary shadow-quiet transition-colors hover:border-jade/30 hover:text-ink"
-                onClick={() => {
-                  setDetailOpen(false);
-                  setSelectedFund(null);
-                  setDetailLoading(false);
-                }}
+                onClick={closeFundDetail}
                 type="button"
               >
                 关闭
               </button>
             </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 pb-14">
             {detailLoading ? (
+              <div className="mb-3 rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-xs text-ink-muted">
+                正在补齐净值历史和技术指标，已先显示当前列表快照。
+              </div>
+            ) : null}
+            {detailLoading && !selectedFund ? (
               <div className="glass-card flex min-h-[360px] items-center justify-center text-sm text-ink-muted">
                 正在加载基金详情...
               </div>
             ) : (
               <FundDetailPanel fund={selectedFund} />
             )}
-          </div>
+            </div>
+          </section>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }
@@ -444,9 +524,9 @@ function HoldingRow({ item, idx, positionPct, isExpanded, onAction, onOpenDetail
   onRecord: () => void; onClose: () => void; saving: boolean;
 }) {
   const returnPct = item.holding_return_pct;
-  const navDailyReturn = item.nav_daily_return;
+  const navDailyReturn = realtimeReturn(item);
   const estimatedDailyProfit = item.estimated_daily_profit ?? item.snapshot_daily_profit ?? null;
-  const dailyProfitLabel = item.estimated_daily_profit == null && item.snapshot_daily_profit != null ? quoteStatusText(item) : "";
+  const dailyProfitLabel = item.estimated_daily_return_pct != null ? "估算" : item.snapshot_daily_profit != null ? quoteStatusText(item) : quoteStatusText(item);
   const quoteStatus = quoteStatusText(item);
   return (
     <>
@@ -472,6 +552,7 @@ function HoldingRow({ item, idx, positionPct, isExpanded, onAction, onOpenDetail
         <td className={`px-4 py-3 text-right tabular-nums font-medium ${navDailyReturn == null ? "text-ink-muted" : navDailyReturn >= 0 ? "price-up" : "price-down"}`}>
           <div>{formatPct(navDailyReturn)}</div>
           {quoteStatus ? <div className="mt-0.5 text-[11px] font-normal text-ink-muted">{quoteStatus}</div> : null}
+          {estimateStatusText(item) ? <div className="mt-0.5 text-[11px] font-normal text-amberline" title={item.estimate_warning || item.quote_warning || ""}>{estimateStatusText(item)}</div> : null}
         </td>
         <td className={`px-4 py-3 text-right tabular-nums font-medium ${estimatedDailyProfit == null ? "text-ink-muted" : estimatedDailyProfit >= 0 ? "price-up" : "price-down"}`}>
           <div>{estimatedDailyProfit == null ? "暂无" : `${estimatedDailyProfit >= 0 ? "+" : ""}${estimatedDailyProfit.toFixed(2)}`}</div>
