@@ -4,6 +4,20 @@
 
 项目目标不是替代投资判断，而是把分散的数据检索、基金比较、组合约束和风险提示整理成一个可复核的研究流程。
 
+## 界面预览
+
+### 基金雷达
+
+![基金雷达](docs/images/funds-radar.png)
+
+### 板块风向
+
+![板块风向](docs/images/sectors-overview.png)
+
+### 星图问策
+
+![星图问策](docs/images/chat-workbench.png)
+
 ## 功能概览
 
 - 基金搜索、排名、详情、持仓穿透与净值走势查看
