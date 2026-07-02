@@ -18,6 +18,14 @@
 
 ![星图问策](docs/images/chat-workbench.png)
 
+## Co-workers / Contributors
+
+<a href=" ">
+  < img src="https://github.com/jasonandme.png" width="48" height="48" alt="jasonandme" />
+</a >
+
+[@1JSK1](https://github.com/1JSK1) - Co-worker / Contributor
+
 ## 功能概览
 
 - 基金搜索、排名、详情、持仓穿透与净值走势查看
